@@ -96,6 +96,13 @@ def generate_pdf_report(
             ("WORDWRAP",      (0, 0), (-1, -1), True),
         ]
 
+        details_style = ParagraphStyle(
+            "DetailCell",
+            parent=styles["Normal"],
+            fontSize=8,
+            leading=10,
+        )
+
         for i, flag in enumerate(flags, start=1):
             urgency = flag.get("urgency", "info")
             rgb = _URGENCY_COLORS_RGB.get(urgency, _URGENCY_COLORS_RGB["info"])
@@ -115,10 +122,11 @@ def generate_pdf_report(
                 label,
                 urgency.title(),
                 (flag.get("last_contact_date") or "—")[:12],
-                (details[:130] + "…" if len(details) > 130 else details),
+                Paragraph(details, details_style),
             ])
 
-        col_widths = [1.25 * inch, 1.0 * inch, 1.25 * inch, 0.75 * inch, 0.9 * inch, 2.35 * inch]
+        # Customer=85, PM=90, Issue Type=70, Urgency=42, Last Contact=52, Details=165 → total=504pt
+        col_widths = [85, 90, 70, 42, 52, 165]
         table = Table(rows, colWidths=col_widths, repeatRows=1)
         table.setStyle(TableStyle(style_cmds))
         story.append(table)
