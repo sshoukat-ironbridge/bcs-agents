@@ -30,6 +30,7 @@ from db.state_store import (
     set_agent_run_summary,
     increment_send_count,
     save_email_thread_ids,
+    clear_comms_hold,
 )
 from utils.logger import get_logger
 from config.loader import cfg
@@ -336,6 +337,7 @@ def _run(run_id: "int | None" = None) -> str:
         return "Aborted: google_sheets_id not configured"
 
     URGENTMATTERS_CHANNEL = cfg("slack_urgentmatters_channel") or "urgentmatters"
+    run_start = datetime.now(timezone.utc)
 
     # Fix 2: global email pause switch — default to paused if not yet configured
     emails_paused = (get_config("casey_emails_paused") or "true").strip().lower() == "true"
@@ -429,19 +431,27 @@ def _run(run_id: "int | None" = None) -> str:
     emails_sent = 0
     escalations = 0
     skipped = 0
+    escalation_flags: list[dict] = []
 
     for job in all_db_jobs:
         client_name = job["client_name"]
         pm_name     = job.get("pm_name", "")
         job_id      = f"{client_name}|{pm_name}"
 
-        # Fix 3: per-customer hold — skip ALL processing (no email, no escalation, no Slack)
+        # Per-customer hold — skip ALL processing unless the hold_until date has passed.
         if job.get("comms_hold"):
-            hold_reason = job.get("comms_hold_reason") or "no reason recorded"
-            logger.info(f"HOLD {job_id} — reason: {hold_reason}")
-            _checkpoint(run_id, f"HOLD {job_id} — reason: {hold_reason}")
-            skipped += 1
-            continue
+            hold_until = job.get("comms_hold_until")
+            if hold_until and date.today() >= hold_until:
+                clear_comms_hold(job["id"])
+                logger.info(f"AUTO-RELEASED hold for {client_name} — hold_until {hold_until} has passed")
+                _checkpoint(run_id, f"AUTO-RELEASED hold for {client_name} — hold_until {hold_until}")
+                # Fall through and process this job normally
+            else:
+                hold_reason = job.get("comms_hold_reason") or "no reason recorded"
+                logger.info(f"HOLD {client_name}|{pm_name} — reason: {hold_reason} until {hold_until or 'manually released'}")
+                _checkpoint(run_id, f"HOLD {client_name}|{pm_name} — reason: {hold_reason}")
+                skipped += 1
+                continue
 
         # Idempotency: skip if already emailed today
         if _idempotent_skip(job):
@@ -492,10 +502,17 @@ def _run(run_id: "int | None" = None) -> str:
                 skipped += 1
             else:
                 set_escalation(client_name, pm_name, escalation_reason)
-                msg = build_escalation_slack_msg(job, escalation_reason, contact_date)
-                send_message(URGENTMATTERS_CHANNEL, msg)
                 record_alert_sent(job_id, "escalation", client_name)
                 _write_escalation_to_hubspot(job, escalation_reason)
+                escalation_flags.append({
+                    "client_name":       client_name,
+                    "pm_name":           pm_name,
+                    "flag_type":         "escalation",
+                    "urgency":           "urgent",
+                    "details":           escalation_reason,
+                    "last_contact_date": str(contact_date) if contact_date else "",
+                    "hubspot_deal_id":   job.get("hubspot_deal_id"),
+                })
                 logger.info(f"ESCALATION {job_id} reason={escalation_reason}")
                 _checkpoint(run_id, f"ESCALATION {job_id} reason={escalation_reason}")
                 escalations += 1
@@ -603,6 +620,39 @@ def _run(run_id: "int | None" = None) -> str:
 
     run_summary = f"{emails_sent} emails sent, {escalations} escalations, {skipped} skipped"
     _checkpoint(run_id, f"Casey run complete — {run_summary}")
+
+    # ── End-of-run escalation PDF ────────────────────────────────────────────
+    if escalation_flags:
+        elapsed = (datetime.now(timezone.utc) - run_start).total_seconds()
+        m, s = divmod(int(elapsed), 60)
+        h, m = divmod(m, 60)
+        run_duration_str = f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+        today_str = date.today().isoformat()
+        n = len(escalation_flags)
+        try:
+            from integrations.pdf_report import generate_pdf_report, send_pdf_report
+            pdf_bytes = generate_pdf_report(
+                agent="Casey",
+                flags=escalation_flags,
+                run_summary=run_summary,
+                run_duration=run_duration_str,
+            )
+            if pdf_bytes:
+                send_pdf_report(
+                    agent="Casey",
+                    pdf_bytes=pdf_bytes,
+                    slack_channel=URGENTMATTERS_CHANNEL,
+                    slack_caption=f"Casey Escalation Report — {today_str} — {n} escalation{'s' if n != 1 else ''}. See attached PDF.",
+                    email_to=cfg("chris_notification_email") or "chris.s@bluecollarscholars.net",
+                    email_from=cfg("notification_sender_email") or "",
+                    email_subject=f"Casey Escalation Report — {today_str} — {n} escalation{'s' if n != 1 else ''}",
+                )
+        except Exception as e_pdf:
+            logger.error(f"Casey PDF report failed: {e_pdf}")
+
+    # ── Plain-text run summary to #urgentmatters ─────────────────────────────
+    send_message(URGENTMATTERS_CHANNEL, f"Casey Run Complete — {run_summary}")
+
     return run_summary
 
 

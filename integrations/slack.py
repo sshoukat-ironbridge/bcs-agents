@@ -125,6 +125,41 @@ def send_message(channel: str, text: str) -> bool:
     return ok
 
 
+def upload_file(channel: str, content: bytes, filename: str, initial_comment: str = "") -> bool:
+    """Upload a file to a Slack channel. Bot token must have files:write scope."""
+    from db.state_store import get_config
+    if get_config("silent_mode") == "true":
+        logger.info(f"SILENT MODE — suppressed Slack file upload to #{channel}: {filename}")
+        return True
+    try:
+        _throttle_for_send()
+        client = _client()
+        # files_upload_v2 is preferred (slack_sdk>=3.19); fall back to deprecated files_upload
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                content=content,
+                filename=filename,
+                initial_comment=initial_comment,
+            )
+        except AttributeError:
+            client.files_upload(
+                channels=channel,
+                content=content,
+                filename=filename,
+                filetype="pdf",
+                initial_comment=initial_comment,
+            )
+        logger.info(f"Uploaded '{filename}' to #{channel}")
+        return True
+    except SlackApiError as e:
+        logger.error(f"Slack file upload to #{channel} failed: {_error_code(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Slack file upload to #{channel} error: {e}")
+        return False
+
+
 def send_dm(user_id: str, text: str, pm_name: str = "") -> bool:
     if not user_id:
         return False

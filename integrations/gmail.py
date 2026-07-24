@@ -113,6 +113,59 @@ def send_email(
         return False, "", ""
 
 
+def send_email_with_attachment(
+    sender_email: str,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    attachment_bytes: bytes,
+    attachment_filename: str,
+    attachment_mime_type: str = "application/pdf",
+) -> bool:
+    """Send an email with a binary attachment via Gmail API with domain-wide delegation."""
+    from db.state_store import get_config
+    if get_config("silent_mode") == "true":
+        logger.info(f"SILENT MODE — suppressed email with attachment to {to_email}: {subject}")
+        return False
+
+    import time as _time
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email import encoders as _encoders
+
+    def _attempt() -> bool:
+        service = _get_gmail_service(sender_email)
+        msg = MIMEMultipart()
+        msg["to"] = to_email
+        msg["from"] = sender_email
+        msg["subject"] = subject
+        msg.attach(MIMEText(body_text, "plain"))
+        mime_main, mime_sub = attachment_mime_type.split("/", 1)
+        part = MIMEBase(mime_main, mime_sub)
+        part.set_payload(attachment_bytes)
+        _encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=attachment_filename)
+        msg.attach(part)
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        logger.info(
+            f"Email with attachment sent from {sender_email} to {to_email} "
+            f"file={attachment_filename} id={result.get('id')}"
+        )
+        return True
+
+    try:
+        return _attempt()
+    except Exception as e:
+        logger.warning(f"Gmail attachment send failed ({sender_email} → {to_email}): {e}")
+        try:
+            _time.sleep(30)
+            return _attempt()
+        except Exception as e2:
+            logger.error(f"Gmail attachment send retry failed ({sender_email} → {to_email}): {e2}")
+            return False
+
+
 def _extract_body_text(payload: dict) -> str:
     """Walk a Gmail message payload to find the first text/plain part and decode it."""
     if payload.get("mimeType") == "text/plain":

@@ -98,6 +98,7 @@ if _db_available:
         comms_hold = Column(Boolean, nullable=False, default=False)
         comms_hold_reason = Column(Text, nullable=True)
         comms_hold_set_at = Column(DateTime(timezone=True), nullable=True)
+        comms_hold_until = Column(Date, nullable=True)
         # Fix 2: email thread continuity — preserve Gmail thread across Casey sends
         last_email_thread_id  = Column(Text, nullable=True)
         last_email_message_id = Column(Text, nullable=True)
@@ -203,6 +204,7 @@ def _row_to_dict(row: "CaseyActiveJob") -> dict:
         "comms_hold": row.comms_hold or False,
         "comms_hold_reason": row.comms_hold_reason,
         "comms_hold_set_at": row.comms_hold_set_at,
+        "comms_hold_until": row.comms_hold_until,
         "last_email_thread_id": row.last_email_thread_id,
         "last_email_message_id": row.last_email_message_id,
         "last_email_subject": row.last_email_subject,
@@ -237,6 +239,7 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold BOOLEAN NOT NULL DEFAULT FALSE"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_reason TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_set_at TIMESTAMP WITH TIME ZONE"))
+            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_until DATE"))
             # Fix 4: duplicate send audit trail
             conn.execute(text("ALTER TABLE casey_sent_alerts ADD COLUMN IF NOT EXISTS send_count INTEGER NOT NULL DEFAULT 1"))
             # Fix 2 (thread continuity) + Fix 3 (Fernanda display_note)
@@ -1475,7 +1478,7 @@ def get_weekly_summary() -> dict:
 
 # --- Fix 3: per-customer comms hold ---
 
-def set_comms_hold(job_id: int, reason: str) -> bool:
+def set_comms_hold(job_id: int, reason: str, hold_until: "date | None" = None) -> bool:
     if not _db_available:
         return False
     try:
@@ -1486,6 +1489,7 @@ def set_comms_hold(job_id: int, reason: str) -> bool:
             row.comms_hold = True
             row.comms_hold_reason = reason.strip()
             row.comms_hold_set_at = datetime.now(timezone.utc)
+            row.comms_hold_until = hold_until
             s.commit()
             return True
     except Exception as e:
@@ -1504,6 +1508,7 @@ def clear_comms_hold(job_id: int) -> bool:
             row.comms_hold = False
             row.comms_hold_reason = None
             row.comms_hold_set_at = None
+            row.comms_hold_until = None
             s.commit()
             return True
     except Exception as e:

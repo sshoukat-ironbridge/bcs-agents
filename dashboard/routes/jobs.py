@@ -1,9 +1,9 @@
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Optional
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from typing import Optional
 
 from db.state_store import (
     _Session, _db_available,
@@ -83,6 +83,10 @@ def _get_jobs_from_db(to_start: bool) -> list[dict]:
                     r.comms_hold_set_at.strftime("%b %d, %Y %H:%M UTC")
                     if r.comms_hold_set_at else ""
                 ),
+                "comms_hold_until": r.comms_hold_until.isoformat() if r.comms_hold_until else "",
+                "comms_hold_expired": (
+                    date.today() >= r.comms_hold_until
+                ) if r.comms_hold_until else False,
                 "status": _status_for_job({
                     "escalation_flag": r.escalation_flag,
                     "last_pm_contact": r.last_pm_contact,
@@ -119,14 +123,24 @@ async def jobs_in_process(request: Request):
 
 
 @router.post("/jobs/{job_id}/hold")
-async def hold_job(request: Request, job_id: int, reason: Optional[str] = Form(None)):
-    """Place a job on comms hold. Requires a non-empty reason."""
+async def hold_job(
+    request: Request,
+    job_id: int,
+    reason: Optional[str] = Form(None),
+    hold_until: Optional[str] = Form(None),
+):
+    """Place a job on comms hold. Requires a non-empty reason; hold_until date is optional."""
     reason = (reason or "").strip()
     if not reason:
-        # Redirect back; the modal JS already validates so this is a safety net only
         referer = request.headers.get("referer", "/jobs/in-process")
         return RedirectResponse(referer + "?hold_error=1", status_code=303)
-    set_comms_hold(job_id, reason)
+    hold_until_date: Optional[date] = None
+    if hold_until and hold_until.strip():
+        try:
+            hold_until_date = date.fromisoformat(hold_until.strip())
+        except ValueError:
+            hold_until_date = None
+    set_comms_hold(job_id, reason, hold_until=hold_until_date)
     referer = request.headers.get("referer", "/jobs/in-process")
     return RedirectResponse(referer, status_code=303)
 

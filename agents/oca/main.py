@@ -1,7 +1,7 @@
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from agents.oca.checks import (
     check_stale_records,
@@ -13,13 +13,8 @@ from agents.oca.checks import (
     _flag,
 )
 from agents.oca.alerts import (
-    route_alert,
-    route_combined_alert,
-    escalate_unresolved_warning,
-    send_deal_not_found_alert,
     send_deadline_change_alert,
     send_no_email_history_alert,
-    send_approaching_deadline_notifications,
 )
 from db.state_store import (
     init_db,
@@ -421,6 +416,7 @@ def _run(run_id: "int | None" = None) -> str:
 
     logger.info("OCA starting run")
     init_db()
+    run_start = datetime.now(timezone.utc)
 
     from db.state_store import get_pm_list
     pm_config = get_pm_list()
@@ -488,8 +484,9 @@ def _run(run_id: "int | None" = None) -> str:
     # ── Step 4: Process flags with deduplication + cooldown ─────────────────
     alerted = 0
     suppressed = 0
+    alerted_flags: list[dict] = []
 
-    # Group flags by job_id so multi-issue jobs get one combined Slack message
+    # Group flags by job_id so cooldown checks are per-job
     flags_by_job: dict[str, list[dict]] = defaultdict(list)
     for flag in all_flags:
         flags_by_job[flag["job_id"]].append(flag)
@@ -499,17 +496,10 @@ def _run(run_id: "int | None" = None) -> str:
         for flag in job_flags:
             flag_type = flag["flag_type"]
             client_name = flag.get("client_name", job_id.split("|")[0])
-            urgency = flag.get("urgency", "")
             flag["hubspot_deal_id"] = db_jobs.get(client_name, {}).get("hubspot_deal_id")
 
             if flag_exists(job_id, flag_type):
                 if should_alert_again(job_id, flag_type, cooldown_hours=24):
-                    # Gap 2: warning flags still unresolved >48h after the last
-                    # alert get an extra escalation straight to Josh.
-                    if urgency == "warning":
-                        age_hours = get_flag_alert_age_hours(job_id, flag_type)
-                        if age_hours is not None and age_hours > 48:
-                            escalate_unresolved_warning(flag, int(age_hours))
                     update_flag_alerted(job_id, flag_type)
                     active_flags.append(flag)
                     alerted += 1
@@ -521,26 +511,9 @@ def _run(run_id: "int | None" = None) -> str:
                 active_flags.append(flag)
                 alerted += 1
 
-        if not active_flags:
-            continue
+        alerted_flags.extend(active_flags)
 
-        # deal_not_found flags get a dedicated condensed message to #urgentmatters —
-        # never combined with other flag types.
-        deal_not_found = [f for f in active_flags if f["flag_type"] == "deal_not_found"]
-        other_flags = [f for f in active_flags if f["flag_type"] != "deal_not_found"]
-
-        for flag in deal_not_found:
-            send_deal_not_found_alert(flag)
-
-        if not other_flags:
-            continue
-
-        if len(other_flags) == 1:
-            route_alert(other_flags[0])
-        else:
-            route_combined_alert(other_flags)
-
-    # ── Step 4b: Approaching deadline pre-notifications (23-hour cooldown) ───
+    # ── Step 4b: Approaching deadline — collect for PDF, skip individual sends ──
     to_notify_approaching: list[dict] = []
     for job in approaching_jobs:
         job_id = job["job_id"]
@@ -556,8 +529,17 @@ def _run(run_id: "int | None" = None) -> str:
             to_notify_approaching.append(job)
 
     if to_notify_approaching:
-        send_approaching_deadline_notifications(to_notify_approaching)
-        _checkpoint(run_id, f"Approaching deadline notified: {len(to_notify_approaching)} jobs")
+        for job in to_notify_approaching:
+            alerted_flags.append({
+                "client_name":       job["client_name"],
+                "pm_name":           job["pm_name"],
+                "flag_type":         "approaching_deadline",
+                "urgency":           "warning",
+                "details":           f"PM last contacted customer {job.get('days_since_contact', 6)} days ago — Casey backstop triggers tomorrow",
+                "last_contact_date": job.get("last_contact_date", ""),
+                "hubspot_deal_id":   None,
+            })
+        _checkpoint(run_id, f"Approaching deadline included in report: {len(to_notify_approaching)} jobs")
 
     # ── Step 5: Auto-resolve flags ───────────────────────────────────────────
     for flag_type in _ALL_FLAG_TYPES:
@@ -570,6 +552,39 @@ def _run(run_id: "int | None" = None) -> str:
 
     run_summary = f"{len(all_flags)} flags detected, {alerted} alerted, {suppressed} suppressed"
     _checkpoint(run_id, f"OCA run complete — {run_summary}")
+
+    # ── End-of-run PDF report ────────────────────────────────────────────────
+    elapsed = (datetime.now(timezone.utc) - run_start).total_seconds()
+    m, s = divmod(int(elapsed), 60)
+    h, m = divmod(m, 60)
+    run_duration_str = f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+    today_str = date.today().isoformat()
+    n_issues = len(alerted_flags)
+    try:
+        from integrations.pdf_report import generate_pdf_report, send_pdf_report
+        pdf_bytes = generate_pdf_report(
+            agent="OCA",
+            flags=alerted_flags,
+            run_summary=run_summary,
+            run_duration=run_duration_str,
+        )
+        if pdf_bytes:
+            send_pdf_report(
+                agent="OCA",
+                pdf_bytes=pdf_bytes,
+                slack_channel=cfg("slack_urgentmatters_channel") or "urgentmatters",
+                slack_caption=f"OCA Run Report — {today_str} — {n_issues} issue{'s' if n_issues != 1 else ''} detected. See attached PDF.",
+                email_to=cfg("chris_notification_email") or "chris.s@bluecollarscholars.net",
+                email_from=cfg("notification_sender_email") or "",
+                email_subject=f"OCA Run Report — {today_str} — {n_issues} issue{'s' if n_issues != 1 else ''} detected",
+            )
+    except Exception as e_pdf:
+        logger.error(f"OCA PDF report failed: {e_pdf}")
+
+    # ── Plain-text run summary to #urgentmatters ─────────────────────────────
+    urgentmatters = cfg("slack_urgentmatters_channel") or "urgentmatters"
+    send_message(urgentmatters, f"OCA Run Complete — {run_summary}")
+
     return run_summary
 
 

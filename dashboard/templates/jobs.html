@@ -85,6 +85,13 @@
             {% if job.comms_hold %}
             <div>
               <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">HOLD</span>
+              {% if job.comms_hold_until %}
+                {% if job.comms_hold_expired %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ring-1 ring-yellow-200 ml-1">EXPIRED {{ job.comms_hold_until }}</span>
+                {% else %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 ring-1 ring-orange-100 ml-1">Until {{ job.comms_hold_until }}</span>
+                {% endif %}
+              {% endif %}
               {% if job.comms_hold_reason %}
               <p class="text-xs text-red-700 mt-1 max-w-[160px] truncate" title="{{ job.comms_hold_reason }} — {{ job.comms_hold_set_at }}">{{ job.comms_hold_reason }}</p>
               {% endif %}
@@ -128,6 +135,13 @@
             {% if job.comms_hold %}
             <div>
               <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">HOLD</span>
+              {% if job.comms_hold_until %}
+                {% if job.comms_hold_expired %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ring-1 ring-yellow-200 ml-1">EXPIRED {{ job.comms_hold_until }}</span>
+                {% else %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 ring-1 ring-orange-100 ml-1">Until {{ job.comms_hold_until }}</span>
+                {% endif %}
+              {% endif %}
               {% if job.comms_hold_reason %}
               <p class="text-xs text-red-700 mt-1 max-w-[160px] truncate" title="{{ job.comms_hold_reason }} — {{ job.comms_hold_set_at }}">{{ job.comms_hold_reason }}</p>
               {% endif %}
@@ -178,6 +192,12 @@
           placeholder="Why is this job being placed on hold?"></textarea>
         <p id="hold-reason-error" class="hidden text-xs text-red-600 mt-1">Reason cannot be empty.</p>
       </div>
+      <div class="mb-5">
+        <label class="block text-xs font-medium text-slate-600 mb-1" for="hold-until">Hold until date <span class="text-slate-400">(optional)</span></label>
+        <input type="date" id="hold-until" name="hold_until"
+          class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500">
+        <p class="text-xs text-slate-400 mt-1">Casey will automatically release this hold on the specified date.</p>
+      </div>
       <div class="flex items-center justify-end gap-3">
         <button type="button" onclick="closeHoldModal()"
           class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors duration-150">
@@ -214,6 +234,7 @@
   function openHoldModal(jobId) {
     document.getElementById('hold-form').action = '/jobs/' + jobId + '/hold';
     document.getElementById('hold-reason').value = '';
+    document.getElementById('hold-until').value = '';
     document.getElementById('hold-reason-error').classList.add('hidden');
     document.getElementById('hold-modal').classList.remove('hidden');
     document.getElementById('hold-reason').focus();
@@ -221,6 +242,7 @@
 
   function closeHoldModal() {
     document.getElementById('hold-modal').classList.add('hidden');
+    document.getElementById('hold-until').value = '';
   }
 
   function validateHoldReason() {
