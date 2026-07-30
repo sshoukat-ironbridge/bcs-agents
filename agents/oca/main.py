@@ -37,6 +37,7 @@ from db.state_store import (
     append_agent_run_log,
     finish_agent_run,
     set_agent_run_summary,
+    reconcile_retired_jobs,
 )
 from integrations.slack import send_message
 from integrations.sheets import get_active_jobs, parse_latest_date
@@ -440,7 +441,17 @@ def _run(run_id: "int | None" = None) -> str:
         f"not found {hs_sync_summary.get('not_found', 0)}",
     )
 
-    # ── Step 2b: Gmail-based PM↔customer contact history ────────────────────
+    # ── Step 2b: Reconciliation — retire jobs no longer present in sheet ────
+    sheet_keys = {
+        (j["client_name"], j.get("sheet_tab", ""), j.get("primary_job_type", ""))
+        for j in sheet_jobs if j["client_name"].strip()
+    }
+    retired = reconcile_retired_jobs(sheet_keys)
+    if retired:
+        logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+        _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+
+    # ── Step 2c: Gmail-based PM↔customer contact history ────────────────────
     _fetch_email_histories(sheet_jobs, pm_config)
     contact_date_map = _build_contact_date_map(sheet_jobs)
 

@@ -31,6 +31,7 @@ from db.state_store import (
     increment_send_count,
     save_email_thread_ids,
     clear_comms_hold,
+    reconcile_retired_jobs,
 )
 from utils.logger import get_logger
 from config.loader import cfg
@@ -423,6 +424,16 @@ def _run(run_id: "int | None" = None) -> str:
 
     logger.info(f"Synced {synced} jobs to database")
     _checkpoint(run_id, f"HubSpot sync: {synced} jobs synced to database")
+
+    # ── Reconciliation: retire jobs no longer present in sheet ───────────────
+    sheet_keys = {
+        (j["client_name"], j.get("sheet_tab", ""), j.get("primary_job_type", ""))
+        for j in sheet_jobs if j["client_name"].strip()
+    }
+    retired = reconcile_retired_jobs(sheet_keys)
+    if retired:
+        logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+        _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
 
     # ── Step 2: Process all active jobs (PM contact gap determines sending) ──
     all_db_jobs = get_all_active_jobs()

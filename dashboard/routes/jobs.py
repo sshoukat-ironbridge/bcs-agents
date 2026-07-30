@@ -42,7 +42,10 @@ def _get_jobs_from_db(to_start: bool) -> list[dict]:
         with _Session() as s:
             rows = (
                 s.query(CaseyActiveJob)
-                .filter(CaseyActiveJob.sheet_tab == target_tab)
+                .filter(
+                    CaseyActiveJob.sheet_tab == target_tab,
+                    (CaseyActiveJob.retired == False) | (CaseyActiveJob.retired == None),
+                )
                 .order_by(CaseyActiveJob.synced_at.desc())
                 .all()
             )

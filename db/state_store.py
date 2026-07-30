@@ -105,6 +105,9 @@ if _db_available:
         last_email_subject    = Column(Text, nullable=True)
         # Upsert key v2: allows multi-job clients to have one row per job type
         primary_job_type = Column(String, nullable=True)
+        # Soft-delete: jobs removed from sheet are marked retired, not deleted
+        retired    = Column(Boolean, nullable=False, default=False)
+        retired_at = Column(DateTime(timezone=True), nullable=True)
 
     class CustomerEmailHistory(Base):
         __tablename__ = "customer_email_history"
@@ -209,6 +212,8 @@ def _row_to_dict(row: "CaseyActiveJob") -> dict:
         "last_email_message_id": row.last_email_message_id,
         "last_email_subject": row.last_email_subject,
         "primary_job_type": row.primary_job_type or "",
+        "retired":    row.retired or False,
+        "retired_at": row.retired_at,
     }
 
 
@@ -340,6 +345,29 @@ def init_db() -> None:
                 except Exception as _e:
                     conn.rollback()
                     logger.warning(f"upsert_key_v2_migrated migration: {_e}")
+
+            # Soft-delete columns for sheet reconciliation
+            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS retired BOOLEAN NOT NULL DEFAULT FALSE"))
+            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP WITH TIME ZONE"))
+            conn.commit()
+
+            # One-time migration: retire Patricia Anderson (manually removed from sheet)
+            if not conn.execute(
+                text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
+            ).fetchone():
+                try:
+                    conn.execute(text(
+                        "UPDATE casey_active_jobs SET retired = true, retired_at = NOW() "
+                        "WHERE client_name = 'Patricia Anderson' AND (retired = false OR retired IS NULL)"
+                    ))
+                    conn.execute(
+                        text("INSERT INTO app_config (key, value) VALUES ('patricia_anderson_retired', 'true')")
+                    )
+                    conn.commit()
+                    logger.info("One-time migration: retired Patricia Anderson from active jobs")
+                except Exception as _e:
+                    conn.rollback()
+                    logger.warning(f"patricia_anderson_retired migration: {_e}")
 
             # Seed default HubSpot field names if not already set
             _hs_defaults = {
@@ -838,6 +866,11 @@ def upsert_active_job(job: dict) -> None:
                 .first()
             )
             if row:
+                # Un-retire if the job has returned to the sheet
+                if row.retired:
+                    row.retired = False
+                    row.retired_at = None
+                    logger.info(f"UN-RETIRED {client_name} — job returned to sheet")
                 row.pm_name = pm_name
                 row.primary_job_type = primary_job_type
                 row.job_type = job.get("job_type")
@@ -945,10 +978,17 @@ def get_escalated_jobs() -> list[dict]:
 
 def get_all_active_jobs() -> list[dict]:
     if not _db_available:
-        return list(_memory_jobs.values())
+        return [j for j in _memory_jobs.values() if not j.get("retired")]
     try:
         with _Session() as session:
-            return [_row_to_dict(r) for r in session.query(CaseyActiveJob).all()]
+            rows = (
+                session.query(CaseyActiveJob)
+                .filter(
+                    (CaseyActiveJob.retired == False) | (CaseyActiveJob.retired == None)
+                )
+                .all()
+            )
+            return [_row_to_dict(r) for r in rows]
     except Exception as e:
         logger.error(f"DB error in get_all_active_jobs: {e}")
         return []
@@ -1514,6 +1554,79 @@ def clear_comms_hold(job_id: int) -> bool:
     except Exception as e:
         logger.error(f"clear_comms_hold({job_id}): {e}")
         return False
+
+
+# --- Sheet reconciliation: soft-delete jobs removed from sheet ---
+
+def retire_job(client_name: str, sheet_tab: str, primary_job_type: str) -> bool:
+    """Mark a specific job row as retired (no longer present in sheet)."""
+    now = datetime.now(timezone.utc)
+    if not _db_available:
+        key = (client_name, sheet_tab or "", primary_job_type or "")
+        if key in _memory_jobs and not _memory_jobs[key].get("retired"):
+            _memory_jobs[key]["retired"] = True
+            _memory_jobs[key]["retired_at"] = now
+            logger.info(f"RETIRED {client_name} — no longer present in sheet, removing from active processing")
+            return True
+        return False
+    try:
+        with _Session() as s:
+            row = s.query(CaseyActiveJob).filter_by(
+                client_name=client_name,
+                sheet_tab=sheet_tab or "",
+                primary_job_type=primary_job_type or "",
+            ).first()
+            if row and not row.retired:
+                row.retired = True
+                row.retired_at = now
+                s.commit()
+                logger.info(f"RETIRED {client_name} — no longer present in sheet, removing from active processing")
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"retire_job({client_name}): {e}")
+        return False
+
+
+def reconcile_retired_jobs(sheet_keys: set) -> int:
+    """Retire all non-retired active-tab rows whose (client_name, sheet_tab, primary_job_type)
+    key is absent from the current sheet fetch. Returns count of newly retired rows."""
+    now = datetime.now(timezone.utc)
+    retired_count = 0
+
+    if not _db_available:
+        for key, job in list(_memory_jobs.items()):
+            client_name, sheet_tab, primary_job_type = key
+            if sheet_tab not in ("in_process", "to_start"):
+                continue
+            if key not in sheet_keys and not job.get("retired"):
+                job["retired"] = True
+                job["retired_at"] = now
+                logger.info(f"RETIRED {client_name} — no longer present in sheet, removing from active processing")
+                retired_count += 1
+        return retired_count
+
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(CaseyActiveJob)
+                .filter(
+                    CaseyActiveJob.sheet_tab.in_(["in_process", "to_start"]),
+                    (CaseyActiveJob.retired == False) | (CaseyActiveJob.retired == None),
+                )
+                .all()
+            )
+            for row in rows:
+                key = (row.client_name, row.sheet_tab or "", row.primary_job_type or "")
+                if key not in sheet_keys:
+                    row.retired = True
+                    row.retired_at = now
+                    logger.info(f"RETIRED {row.client_name} — no longer present in sheet, removing from active processing")
+                    retired_count += 1
+            s.commit()
+    except Exception as e:
+        logger.error(f"DB error in reconcile_retired_jobs: {e}")
+    return retired_count
 
 
 # --- Fix 4: duplicate send audit trail ---
