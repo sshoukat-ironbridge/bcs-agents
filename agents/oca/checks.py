@@ -43,6 +43,9 @@ def check_stale_records(sheet_jobs: list, contact_date_map: "dict | None" = None
     today = date.today()
     flags = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "")
 
@@ -73,6 +76,9 @@ def check_missing_pm(sheet_jobs: list, contact_date_map: "dict | None" = None) -
     pm_config = _get_pm_config()
     flags = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "").strip()
 
@@ -115,6 +121,9 @@ def check_unconfirmed_crew(sheet_jobs: list, contact_date_map: "dict | None" = N
     today = date.today()
     flags = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "")
 
@@ -198,6 +207,9 @@ def check_dropped_invoices(sheet_jobs: list, contact_date_map: "dict | None" = N
     contact_date_map = contact_date_map or {}
     flags = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         sheet_flag = _check_sheet_balance(job, contact_date_map)
 
         qb_status = get_invoice_status_for_customer(job["client_name"])
@@ -236,6 +248,9 @@ def check_job_readiness(
     ]
     flags = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "")
         client_lower = client_name.lower()
@@ -272,6 +287,9 @@ def check_approaching_deadline(sheet_jobs: list, contact_date_map: "dict | None"
     today = date.today()
     approaching = []
     for job in sheet_jobs:
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "")
 

@@ -262,6 +262,8 @@ def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
         f"DB upserted: {synced}, matched by contact: {matched_by_contact}, "
         f"matched by deal name: {matched_by_name}, not found: {not_found}, errors: {errors}"
     )
+    held_jobs = [j for j in db_map.values() if j.get("comms_hold")]
+    logger.info(f"Jobs on comms hold (skipped by OCA): {len(held_jobs)}")
     return {
         "matched_contact": matched_by_contact,
         "matched_name": matched_by_name,
@@ -463,6 +465,12 @@ def _run(run_id: "int | None" = None) -> str:
     # HubSpot's search index (hs_deals above) hasn't caught up yet.
     from db.state_store import get_all_active_jobs
     db_jobs = {j["client_name"]: j for j in get_all_active_jobs()}
+
+    # Enrich sheet_jobs with comms_hold from DB so check functions can honour it
+    for _job in sheet_jobs:
+        _db = db_jobs.get(_job["client_name"], {})
+        _job["comms_hold"] = _db.get("comms_hold", False)
+        _job["comms_hold_reason"] = _db.get("comms_hold_reason", "")
 
     # ── Step 3: Run checks ───────────────────────────────────────────────────
     stale_flags          = check_stale_records(sheet_jobs, contact_date_map)
