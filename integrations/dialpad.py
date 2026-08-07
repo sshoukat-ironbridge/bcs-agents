@@ -89,7 +89,9 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
     best_date: "date | None" = None
     best_type: "str | None" = None
 
-    for endpoint, contact_type in [("calls", "call"), ("sms", "text")]:
+    # Dialpad v2 uses singular resource names: /call (not /calls); /sms does not
+    # exist as a top-level resource — SMS history is under /channels/sms.
+    for endpoint, contact_type in [("call", "call"), ("channels/sms", "text")]:
         try:
             resp = requests.get(
                 f"{base_url}/{endpoint}",
@@ -124,7 +126,8 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
                 ):
                     continue
 
-                ts = item.get("date_started") or item.get("date_created") or item.get("created_at")
+                ts = (item.get("date_started") or item.get("started_at")
+                      or item.get("date_created") or item.get("created_at"))
                 contact_date = _parse_contact_date(ts)
                 if contact_date and (best_date is None or contact_date > best_date):
                     best_date = contact_date
