@@ -149,6 +149,7 @@
             <th class="px-4 py-2.5 rounded-l-lg">Name</th>
             <th class="px-4 py-2.5">Email</th>
             <th class="px-4 py-2.5">Slack User ID</th>
+            <th class="px-4 py-2.5">Dialpad ID</th>
             <th class="px-4 py-2.5">Note</th>
             <th class="px-4 py-2.5 rounded-r-lg"></th>
           </tr>
@@ -159,6 +160,17 @@
             <td class="px-4 py-3 font-medium text-slate-800">{{ pm.full_name }}</td>
             <td class="px-4 py-3 text-slate-600">{{ pm.email }}</td>
             <td class="px-4 py-3 text-slate-500 font-mono text-xs">{{ pm.slack_user_id }}</td>
+            <td id="pm-dialpad-cell-{{ pm.id }}" class="px-4 py-3">
+              <form hx-post="/api/config/pm/{{ pm.id }}/set-dialpad-id"
+                hx-target="#pm-dialpad-cell-{{ pm.id }}" hx-swap="outerHTML"
+                class="flex items-center gap-1.5">
+                <input type="text" name="dialpad_user_id" value="{{ pm.dialpad_user_id or '' }}"
+                  placeholder="Dialpad ID"
+                  class="w-28 px-2 py-1 text-xs border border-slate-200 rounded font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"/>
+                <button type="submit"
+                  class="text-xs text-teal-600 hover:text-teal-800 font-medium">Set</button>
+              </form>
+            </td>
             <td class="px-4 py-3">
               {% if pm.display_note %}<span class="text-slate-400 italic text-xs">{{ pm.display_note }}</span>{% else %}<span class="text-slate-300 text-xs">—</span>{% endif %}
             </td>
@@ -181,6 +193,10 @@
             <td class="px-4 py-2">
               <input form="pm-add-form" name="slack_user_id" type="text" placeholder="U0XXXXXXX"
                 class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"/>
+            </td>
+            <td class="px-4 py-2">
+              <input form="pm-add-form" name="dialpad_user_id" type="text" placeholder="Dialpad ID"
+                class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"/>
             </td>
             <td class="px-4 py-2">
               <input form="pm-add-form" name="display_note" type="text" placeholder="e.g. Laura Arbelaez"
@@ -426,6 +442,49 @@
       'To get a person\'s Slack User ID: click their name/profile in Slack → <span class="font-medium text-slate-600">More → Copy member ID</span>.',
       'To get a channel\'s name: open the channel in Slack and use the name shown at the top (without the #) — make sure the bot is invited to that channel.',
       'Fill in the fields above and click <span class="font-medium text-slate-600">Save Settings</span>.',
+    ]) }}
+  </div>
+
+  {# ── Dialpad ── #}
+  <div id="dialpad" class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-6">
+    <div class="flex items-center justify-between mb-5">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-teal-100 rounded-xl flex items-center justify-center text-lg">📞</div>
+        <div>
+          <h2 class="font-semibold text-slate-800">Dialpad</h2>
+          <p class="text-xs text-slate-500">API credentials for call and text contact history</p>
+        </div>
+      </div>
+      <span hx-get="/api/config/dialpad/status" hx-trigger="load" hx-swap="outerHTML">
+        <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400">
+          <span class="w-1.5 h-1.5 bg-slate-300 rounded-full"></span> Checking…
+        </span>
+      </span>
+    </div>
+    <form hx-post="/api/config/dialpad" hx-target="#toast" hx-swap="innerHTML">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        {{ pwd_field('dialpad_api_key', 'API Key', cfg.get('dialpad_api_key','')) }}
+        {{ text_field('dialpad_api_base_url', 'API Base URL', cfg.get('dialpad_api_base_url','https://dialpad.com/api/v2'), 'https://dialpad.com/api/v2') }}
+      </div>
+      <div class="flex items-center gap-3 pt-1">
+        <button type="submit"
+          class="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm hover:shadow-md transition-all duration-150">
+          Save Settings
+        </button>
+        <button type="button"
+          hx-post="/api/config/dialpad/test" hx-target="#toast" hx-swap="innerHTML"
+          class="px-4 py-2 text-sm font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-xl transition-colors duration-150">
+          Test Connection
+        </button>
+      </div>
+    </form>
+    {{ howto('How to connect your Dialpad account', [
+      'Log in to Dialpad and go to <span class="font-medium text-slate-600">Settings → API</span> (or Developer settings).',
+      'Create an API key with read access to Calls and SMS.',
+      'Paste the key into the API Key field above and click <span class="font-medium text-slate-600">Save Settings</span>.',
+      'Click <span class="font-medium text-slate-600">Test Connection</span> to verify the key works.',
+      'For each PM, enter their Dialpad numeric user ID in the PM List table above.',
+      'To find a user ID: use the Dialpad Admin portal → Users, or call <span class="font-medium text-slate-600">GET /users/me</span> with the API key — the <span class="font-medium text-slate-600">id</span> field in the response is the user ID.',
     ]) }}
   </div>
 

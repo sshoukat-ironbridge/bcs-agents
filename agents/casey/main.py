@@ -163,16 +163,25 @@ def _idempotent_skip(job: dict) -> bool:
 
 
 def _get_contact_date(client_name: str, pm_name: str, job: dict) -> "date | None":
-    """Last PM↔customer contact date: Gmail history (cached by OCA) first, sheet fallback otherwise.
+    """Last PM↔customer contact date: Gmail and Dialpad (most recent wins), then sheet fallback.
 
     `job` here is a casey_active_jobs row dict (from get_all_active_jobs),
     where the sheet's "Most Recent communication" value is stored under
     most_recent_contact — fall back to sheet_last_contact too in case a raw
     sheet job dict is ever passed in.
     """
+    from integrations.dialpad import get_dialpad_contact_date
+
     history = get_email_history(client_name, pm_name)
-    if history and history.last_sent_at:
-        return history.last_sent_at
+    gmail_date = history.last_sent_at if history and history.last_sent_at else None
+
+    customer_phone = (job.get("customer_phone") or "").strip()
+    dialpad_date = get_dialpad_contact_date(client_name, pm_name, customer_phone)
+
+    candidates = [d for d in [gmail_date, dialpad_date] if d]
+    if candidates:
+        return max(candidates)
+
     sheet_value = job.get("most_recent_contact") or job.get("sheet_last_contact", "")
     return parse_latest_date(sheet_value)
 

@@ -339,21 +339,52 @@ def _fetch_email_histories(sheet_jobs: list, pm_config: list) -> None:
                 send_no_email_history_alert(client_name, pm_name, pm_email, customer_email)
 
 
+def _fetch_dialpad_histories(sheet_jobs: list) -> None:
+    """Fetch and cache Dialpad call/text history for each job that has a customer phone."""
+    from integrations.dialpad import get_dialpad_contact_date
+    fetched = 0
+    for job in sheet_jobs:
+        client_name = job["client_name"]
+        if not client_name.strip():
+            continue
+        customer_phone = (job.get("customer_phone") or "").strip()
+        if not customer_phone:
+            continue
+        pm_name = job.get("pm_name", "")
+        get_dialpad_contact_date(client_name, pm_name, customer_phone)
+        fetched += 1
+    logger.info(f"Dialpad histories fetched/refreshed for {fetched} jobs")
+
+
 def _build_contact_date_map(sheet_jobs: list) -> dict:
     """Returns {client_name: last_contact_date | None}.
 
-    Gmail-fetched history (cached by _fetch_email_histories) is the primary
-    source; falls back to the sheet's "Most Recent communication" column.
+    Sources in priority: Gmail and Dialpad (most recent wins), then sheet fallback.
+    Both Gmail and Dialpad caches are pre-populated before this function is called.
     """
+    from integrations.dialpad import get_dialpad_contact_date
     contact_map: dict = {}
     for job in sheet_jobs:
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "")
+        customer_phone = (job.get("customer_phone") or "").strip()
 
         history = get_email_history(client_name, pm_name)
-        if history and history.last_sent_at:
-            contact_map[client_name] = history.last_sent_at
-            logger.info(f"Contact date for {client_name}: {history.last_sent_at} (source: gmail)")
+        gmail_date = history.last_sent_at if history and history.last_sent_at else None
+
+        dialpad_date = get_dialpad_contact_date(client_name, pm_name, customer_phone)
+
+        candidates = [d for d in [gmail_date, dialpad_date] if d]
+        if candidates:
+            contact_date = max(candidates)
+            if gmail_date and dialpad_date:
+                source = "gmail" if gmail_date >= dialpad_date else "dialpad"
+            elif gmail_date:
+                source = "gmail"
+            else:
+                source = "dialpad"
+            contact_map[client_name] = contact_date
+            logger.info(f"Contact date for {client_name}: {contact_date} (source: {source})")
             continue
 
         sheet_date = parse_latest_date(job.get("sheet_last_contact", ""))
@@ -363,7 +394,7 @@ def _build_contact_date_map(sheet_jobs: list) -> dict:
             continue
 
         contact_map[client_name] = None
-        logger.info(f"Contact date for {client_name}: none (no gmail or sheet data)")
+        logger.info(f"Contact date for {client_name}: none (no gmail, dialpad, or sheet data)")
     return contact_map
 
 
@@ -453,8 +484,9 @@ def _run(run_id: "int | None" = None) -> str:
         logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
         _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
 
-    # ── Step 2c: Gmail-based PM↔customer contact history ────────────────────
+    # ── Step 2c: PM↔customer contact history (Gmail + Dialpad) ──────────────
     _fetch_email_histories(sheet_jobs, pm_config)
+    _fetch_dialpad_histories(sheet_jobs)
     contact_date_map = _build_contact_date_map(sheet_jobs)
 
     # Re-fetch open deals — check_job_readiness() needs the up-to-date list.

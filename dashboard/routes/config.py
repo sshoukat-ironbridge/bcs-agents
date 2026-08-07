@@ -11,7 +11,7 @@ from typing import Optional
 
 from db.state_store import (
     get_all_config, set_config, get_config,
-    get_pm_list, add_pm, delete_pm,
+    get_pm_list, add_pm, delete_pm, set_pm_dialpad_user_id,
     get_sales_rep_list, add_sales_rep, delete_sales_rep,
 )
 
@@ -37,17 +37,41 @@ def _toast(msg: str, success: bool = True) -> str:
     return f'<span class="inline-flex items-center gap-1.5 text-{color}-700 font-semibold"><span class="text-{color}-500">{icon}</span> {msg}</span>'
 
 
+def _pm_dialpad_cell(pm_id: int, dialpad_user_id: str, saved: bool = False) -> str:
+    indicator = ' <span class="text-emerald-500 text-xs font-medium">✓</span>' if saved else ""
+    return (
+        f'<td id="pm-dialpad-cell-{pm_id}" class="px-4 py-3">'
+        f'<form hx-post="/api/config/pm/{pm_id}/set-dialpad-id"'
+        f' hx-target="#pm-dialpad-cell-{pm_id}" hx-swap="outerHTML"'
+        f' class="flex items-center gap-1.5">'
+        f'<input type="text" name="dialpad_user_id" value="{dialpad_user_id or ""}"'
+        f' placeholder="Dialpad ID"'
+        f' class="w-28 px-2 py-1 text-xs border border-slate-200 rounded font-mono'
+        f' focus:outline-none focus:ring-1 focus:ring-teal-500"/>'
+        f'<button type="submit"'
+        f' class="text-xs text-teal-600 hover:text-teal-800 font-medium">Set</button>'
+        f'{indicator}'
+        f'</form>'
+        f'</td>'
+    )
+
+
 def _pm_table_html(pms: list) -> str:
     rows = ""
     for pm in pms:
-        pid, name, email, slack = pm["id"], pm["full_name"], pm["email"], pm["slack_user_id"]
+        pid  = pm["id"]
+        name = pm["full_name"]
+        email = pm["email"]
+        slack = pm["slack_user_id"]
         note = pm.get("display_note") or ""
+        dialpad_uid = pm.get("dialpad_user_id") or ""
         note_cell = f'<span class="text-slate-400 italic text-xs">{note}</span>' if note else '<span class="text-slate-300 text-xs">—</span>'
         rows += (
             f'<tr class="hover:bg-slate-50/80 transition-colors duration-100">'
             f'<td class="px-4 py-3 font-medium text-slate-800">{name}</td>'
             f'<td class="px-4 py-3 text-slate-600">{email}</td>'
             f'<td class="px-4 py-3 text-slate-500 font-mono text-xs">{slack}</td>'
+            + _pm_dialpad_cell(pid, dialpad_uid) +
             f'<td class="px-4 py-3">{note_cell}</td>'
             f'<td class="px-4 py-3 text-right">'
             f'<button hx-delete="/api/config/pm/{pid}" hx-target="#pm-tbody" hx-swap="innerHTML"'
@@ -64,6 +88,8 @@ def _pm_table_html(pms: list) -> str:
         ' class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500"/></td>'
         '<td class="px-4 py-2"><input form="pm-add-form" name="slack_user_id" type="text" placeholder="U0XXXXXXX"'
         ' class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"/></td>'
+        '<td class="px-4 py-2"><input form="pm-add-form" name="dialpad_user_id" type="text" placeholder="Dialpad ID"'
+        ' class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"/></td>'
         '<td class="px-4 py-2"><input form="pm-add-form" name="display_note" type="text" placeholder="e.g. Laura Arbelaez"'
         ' class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-500"/></td>'
         '<td class="px-4 py-2 text-right whitespace-nowrap">'
@@ -440,18 +466,81 @@ async def test_hubspot():
     return HTMLResponse(_toast("No access token configured", success=False))
 
 
+# ── Dialpad config ─────────────────────────────────────────────────────────────
+
+@router.post("/api/config/dialpad", response_class=HTMLResponse)
+async def save_dialpad_config(
+    dialpad_api_key:      Optional[str] = Form(None),
+    dialpad_api_base_url: Optional[str] = Form(None),
+):
+    for key, val in [
+        ("dialpad_api_key",      dialpad_api_key),
+        ("dialpad_api_base_url", dialpad_api_base_url),
+    ]:
+        if val is not None:
+            set_config(key, val.strip())
+    return HTMLResponse(_toast("Dialpad settings saved"))
+
+
+@router.post("/api/config/dialpad/test", response_class=HTMLResponse)
+async def test_dialpad():
+    import requests as _req
+    api_key  = (get_config("dialpad_api_key") or "").strip()
+    base_url = ((get_config("dialpad_api_base_url") or "").strip() or "https://dialpad.com/api/v2").rstrip("/")
+    if not api_key:
+        return HTMLResponse(_toast("No API key configured", success=False))
+    try:
+        resp = _req.get(
+            f"{base_url}/users/me",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            name = data.get("display_name") or data.get("name") or "user"
+            return HTMLResponse(_toast(f"Dialpad connected — {name}"))
+        return HTMLResponse(_toast(f"Dialpad returned {resp.status_code}", success=False))
+    except Exception as e:
+        return HTMLResponse(_toast(f"Connection failed: {e}", success=False))
+
+
+@router.get("/api/config/dialpad/status", response_class=HTMLResponse)
+async def dialpad_status():
+    api_key = (get_config("dialpad_api_key") or "").strip()
+    if api_key:
+        badge = (
+            '<span id="dialpad-status" class="inline-flex items-center gap-1.5 text-xs font-medium'
+            ' text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full ring-1 ring-emerald-100">'
+            '<span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> API key configured</span>'
+        )
+    else:
+        badge = (
+            '<span id="dialpad-status" class="inline-flex items-center gap-1.5 text-xs font-medium'
+            ' text-red-700 bg-red-50 px-2.5 py-1 rounded-full ring-1 ring-red-100">'
+            '<span class="w-1.5 h-1.5 bg-red-500 rounded-full"></span> Not configured</span>'
+        )
+    return HTMLResponse(badge)
+
+
 # ── PM CRUD ────────────────────────────────────────────────────────────────────
 
 @router.post("/api/config/pm/add", response_class=HTMLResponse)
 async def api_add_pm(
-    full_name:     Optional[str] = Form(None),
-    email:         Optional[str] = Form(None),
-    slack_user_id: Optional[str] = Form(None),
-    display_note:  Optional[str] = Form(None),
+    full_name:       Optional[str] = Form(None),
+    email:           Optional[str] = Form(None),
+    slack_user_id:   Optional[str] = Form(None),
+    dialpad_user_id: Optional[str] = Form(None),
+    display_note:    Optional[str] = Form(None),
 ):
     if full_name:
-        add_pm(full_name, email or "", slack_user_id or "", display_note or "")
+        add_pm(full_name, email or "", slack_user_id or "", display_note or "", dialpad_user_id or "")
     return HTMLResponse(_pm_table_html(get_pm_list()))
+
+
+@router.post("/api/config/pm/{pm_id}/set-dialpad-id", response_class=HTMLResponse)
+async def api_set_pm_dialpad_id(pm_id: int, dialpad_user_id: Optional[str] = Form(None)):
+    set_pm_dialpad_user_id(pm_id, (dialpad_user_id or "").strip())
+    return HTMLResponse(_pm_dialpad_cell(pm_id, (dialpad_user_id or "").strip(), saved=True))
 
 
 @router.delete("/api/config/pm/{pm_id}", response_class=HTMLResponse)

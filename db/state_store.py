@@ -122,6 +122,18 @@ if _db_available:
         email_snippets    = Column(Text, nullable=True)
         fetched_at        = Column(DateTime(timezone=True), nullable=True)
 
+    class DialpadContactHistory(Base):
+        __tablename__ = "dialpad_contact_history"
+        __table_args__ = (UniqueConstraint("client_name", "pm_name", name="uq_dialpad_history_client_pm"),)
+
+        id                = Column(Integer, primary_key=True, autoincrement=True)
+        client_name       = Column(String, nullable=False)
+        pm_name           = Column(String, nullable=False)
+        customer_phone    = Column(String, nullable=True)
+        last_contact_date = Column(Date, nullable=True)
+        last_contact_type = Column(String, nullable=True)
+        fetched_at        = Column(DateTime(timezone=True), nullable=True)
+
     class AppConfig(Base):
         __tablename__ = "app_config"
         key   = Column(String, primary_key=True)
@@ -129,11 +141,12 @@ if _db_available:
 
     class PmConfig(Base):
         __tablename__ = "pm_config"
-        id            = Column(Integer, primary_key=True, autoincrement=True)
-        name          = Column(String)
-        email         = Column(String)
-        slack_user_id = Column(String)
-        display_note  = Column(Text, nullable=True)
+        id             = Column(Integer, primary_key=True, autoincrement=True)
+        name           = Column(String)
+        email          = Column(String)
+        slack_user_id  = Column(String)
+        display_note   = Column(Text, nullable=True)
+        dialpad_user_id = Column(String, nullable=True)
 
     class SalesRepConfig(Base):
         __tablename__ = "sales_rep_config"
@@ -351,6 +364,10 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP WITH TIME ZONE"))
             conn.commit()
 
+            # Dialpad user ID per PM
+            conn.execute(text("ALTER TABLE pm_config ADD COLUMN IF NOT EXISTS dialpad_user_id TEXT"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -394,6 +411,9 @@ def init_db() -> None:
                 # nothing goes out on first deploy after a rebuild.
                 "silent_mode":               "true",
                 "silent_mode_toggled_at":    "",
+                # Dialpad integration
+                "dialpad_api_key":           "",
+                "dialpad_api_base_url":      "https://dialpad.com/api/v2",
             }
             for key, default_val in _hs_defaults.items():
                 existing = conn.execute(
@@ -500,6 +520,7 @@ def get_pm_list() -> list:
                     "email": r.email,
                     "slack_user_id": r.slack_user_id,
                     "display_note": r.display_note or "",
+                    "dialpad_user_id": r.dialpad_user_id or "",
                 }
                 for r in s.query(PmConfig).order_by(PmConfig.id).all()
             ]
@@ -508,7 +529,7 @@ def get_pm_list() -> list:
         return []
 
 
-def add_pm(name: str, email: str, slack_user_id: str, display_note: str = "") -> None:
+def add_pm(name: str, email: str, slack_user_id: str, display_note: str = "", dialpad_user_id: str = "") -> None:
     if not _db_available:
         return
     try:
@@ -518,10 +539,24 @@ def add_pm(name: str, email: str, slack_user_id: str, display_note: str = "") ->
                 email=email,
                 slack_user_id=slack_user_id,
                 display_note=display_note or None,
+                dialpad_user_id=dialpad_user_id.strip() or None,
             ))
             s.commit()
     except Exception as e:
         logger.error(f"add_pm: {e}")
+
+
+def set_pm_dialpad_user_id(pm_id: int, dialpad_user_id: str) -> None:
+    if not _db_available:
+        return
+    try:
+        with _Session() as s:
+            row = s.query(PmConfig).filter_by(id=pm_id).first()
+            if row:
+                row.dialpad_user_id = dialpad_user_id.strip() or None
+                s.commit()
+    except Exception as e:
+        logger.error(f"set_pm_dialpad_user_id({pm_id}): {e}")
 
 
 def delete_pm(pm_id: int) -> None:
@@ -1209,6 +1244,61 @@ def upsert_email_history(
             session.commit()
     except Exception as e:
         logger.error(f"DB error in upsert_email_history ({client_name}): {e}")
+
+
+def get_dialpad_history(client_name: str, pm_name: str) -> "DialpadContactHistory | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as session:
+            row = (
+                session.query(DialpadContactHistory)
+                .filter_by(client_name=client_name, pm_name=pm_name or "")
+                .first()
+            )
+            if row:
+                session.expunge(row)
+            return row
+    except Exception as e:
+        logger.error(f"DB error in get_dialpad_history ({client_name}): {e}")
+        return None
+
+
+def upsert_dialpad_history(
+    client_name: str,
+    pm_name: str,
+    customer_phone: str,
+    last_contact_date: "date | None",
+    last_contact_type: "str | None",
+) -> None:
+    if not _db_available:
+        return
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    try:
+        with _Session() as session:
+            row = (
+                session.query(DialpadContactHistory)
+                .filter_by(client_name=client_name, pm_name=pm_name or "")
+                .first()
+            )
+            if row:
+                row.customer_phone    = customer_phone
+                row.last_contact_date = last_contact_date
+                row.last_contact_type = last_contact_type
+                row.fetched_at        = now
+            else:
+                session.add(DialpadContactHistory(
+                    client_name=client_name,
+                    pm_name=pm_name or "",
+                    customer_phone=customer_phone,
+                    last_contact_date=last_contact_date,
+                    last_contact_type=last_contact_type,
+                    fetched_at=now,
+                ))
+            session.commit()
+    except Exception as e:
+        logger.error(f"DB error in upsert_dialpad_history ({client_name}): {e}")
 
 
 def should_fetch_email_history(client_name: str, pm_name: str) -> bool:
