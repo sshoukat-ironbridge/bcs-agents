@@ -491,13 +491,13 @@ async def test_dialpad():
         return HTMLResponse(_toast("No API key configured", success=False))
     try:
         resp = _req.get(
-            f"{base_url}/users/me",
+            f"{base_url}/company",
             headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
             timeout=8,
         )
         if resp.status_code == 200:
             data = resp.json()
-            name = data.get("display_name") or data.get("name") or "user"
+            name = data.get("name") or "account"
             return HTMLResponse(_toast(f"Dialpad connected — {name}"))
         return HTMLResponse(_toast(f"Dialpad returned {resp.status_code}", success=False))
     except Exception as e:
