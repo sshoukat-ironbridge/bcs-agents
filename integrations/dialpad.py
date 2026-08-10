@@ -59,7 +59,7 @@ def _parse_contact_date(ts) -> "date | None":
 
 
 def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | None":
-    """Fetch calls and texts from Dialpad for a PM↔customer phone pair.
+    """Fetch call history from Dialpad for a PM↔customer phone pair.
 
     Returns {"last_contact_date": date, "last_contact_type": str, "fetched_at": datetime}
     or None if nothing found or credentials are missing.
@@ -87,63 +87,57 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
 
     best_date: "date | None" = None
-    best_type: "str | None" = None
 
-    # Dialpad v2 uses singular resource names: /call (not /calls); /sms does not
-    # exist as a top-level resource — SMS history is under /channels/sms.
-    for endpoint, contact_type in [("call", "call"), ("channels/sms", "text")]:
-        try:
-            resp = requests.get(
-                f"{base_url}/{endpoint}",
-                headers=headers,
-                params={"user_id": user_id, "limit": 50},
-                timeout=10,
-            )
-            if resp.status_code == 401:
-                logger.error("Dialpad: invalid API key (401)")
-                return None
-            if resp.status_code != 200:
-                logger.warning(f"Dialpad /{endpoint} returned {resp.status_code} for PM '{pm_name}'")
+    try:
+        resp = requests.get(
+            f"{base_url}/call",
+            headers=headers,
+            params={"user_id": user_id, "limit": 50},
+            timeout=10,
+        )
+        if resp.status_code == 401:
+            logger.error("Dialpad: invalid API key (401)")
+            return None
+        if resp.status_code != 200:
+            logger.warning(f"Dialpad /call returned {resp.status_code} for PM '{pm_name}'")
+            return None
+
+        items = resp.json().get("items") or []
+        for item in items:
+            # Match against the three phone fields present in Dialpad call records
+            candidates = []
+            if item.get("external_number"):
+                candidates.append(_clean_phone(str(item["external_number"])))
+            contact = item.get("contact") or {}
+            if contact.get("phone"):
+                candidates.append(_clean_phone(str(contact["phone"])))
+            target = item.get("target") or {}
+            if target.get("phone"):
+                candidates.append(_clean_phone(str(target["phone"])))
+
+            if not any(
+                c and (c == cleaned_phone or c.endswith(cleaned_phone) or cleaned_phone.endswith(c))
+                for c in candidates
+            ):
                 continue
 
-            items = resp.json().get("items") or []
-            for item in items:
-                # Collect candidate phone numbers from the record
-                candidates = []
-                for field in ("external_number", "to_number", "from_number"):
-                    val = item.get(field)
-                    if val:
-                        candidates.append(_clean_phone(str(val)))
-                contact = item.get("contact") or {}
-                for field in ("phone", "phone_number"):
-                    val = contact.get(field)
-                    if val:
-                        candidates.append(_clean_phone(str(val)))
+            ts = (item.get("date_started") or item.get("started_at")
+                  or item.get("date_created") or item.get("created_at"))
+            contact_date = _parse_contact_date(ts)
+            if contact_date and (best_date is None or contact_date > best_date):
+                best_date = contact_date
 
-                if not any(
-                    c and (c == cleaned_phone or c.endswith(cleaned_phone) or cleaned_phone.endswith(c))
-                    for c in candidates
-                ):
-                    continue
-
-                ts = (item.get("date_started") or item.get("started_at")
-                      or item.get("date_created") or item.get("created_at"))
-                contact_date = _parse_contact_date(ts)
-                if contact_date and (best_date is None or contact_date > best_date):
-                    best_date = contact_date
-                    best_type = contact_type
-
-        except requests.RequestException as e:
-            logger.warning(f"Dialpad /{endpoint} request error for PM '{pm_name}': {e}")
-        except Exception as e:
-            logger.error(f"Dialpad /{endpoint} unexpected error for PM '{pm_name}': {e}")
+    except requests.RequestException as e:
+        logger.warning(f"Dialpad /call request error for PM '{pm_name}': {e}")
+    except Exception as e:
+        logger.error(f"Dialpad /call unexpected error for PM '{pm_name}': {e}")
 
     if best_date is None:
         return None
 
     return {
         "last_contact_date": best_date,
-        "last_contact_type": best_type,
+        "last_contact_type": "call",
         "fetched_at": datetime.now(timezone.utc),
     }
 
