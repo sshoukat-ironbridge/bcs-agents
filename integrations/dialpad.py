@@ -95,6 +95,7 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
             params={"user_id": user_id, "limit": 50},
             timeout=10,
         )
+        logger.info(f"Dialpad /call response for {pm_name}: status={resp.status_code} body={resp.text[:200]}")
         if resp.status_code == 401:
             logger.error("Dialpad: invalid API key (401)")
             return None
@@ -130,7 +131,8 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
     except requests.RequestException as e:
         logger.warning(f"Dialpad /call request error for PM '{pm_name}': {e}")
     except Exception as e:
-        logger.error(f"Dialpad /call unexpected error for PM '{pm_name}': {e}")
+        logger.error(f"Dialpad fetch failed for {pm_name} / {customer_phone}: {type(e).__name__}: {e}")
+        return None
 
     if best_date is None:
         return None
