@@ -337,6 +337,7 @@
       </span>
       {% endif %}
     </div>
+    {{ hs_writes_html | safe }}
     <form hx-post="/api/config/hubspot" hx-target="#toast" hx-swap="innerHTML">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         {{ pwd_field('access_token', 'Access Token', cfg.get('hubspot_access_token','')) }}

@@ -59,6 +59,11 @@ def hs_available() -> bool:
     return not _hs_circuit_open and not _hs_auth_failed
 
 
+def _writes_enabled() -> bool:
+    from db.state_store import get_config
+    return (get_config("hubspot_writes_enabled") or "false").lower() == "true"
+
+
 def _trip_circuit(context: str) -> None:
     global _hs_circuit_open
     if not _hs_circuit_open:
@@ -240,6 +245,9 @@ def get_all_deals_paginated(properties: "list[str] | None" = None) -> list[dict[
 
 def archive_deal(deal_id: str) -> bool:
     """Archive (soft-delete) a HubSpot deal by ID."""
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping archive_deal for {deal_id}")
+        return False
     try:
         resp = _hs_request(
             "delete",
@@ -431,6 +439,9 @@ def create_deal(
 ) -> "str | None":
     """Create a HubSpot deal and return its ID, or None on failure."""
     if not hs_available():
+        return None
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping create_deal for '{dealname}'")
         return None
     token = cfg("hubspot_access_token")
     if not token:
@@ -706,6 +717,9 @@ def create_contact(firstname: str, lastname: str = "", email: str = "", phone: s
     """Create a HubSpot contact and return its ID, or None on failure."""
     if not hs_available():
         return None
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping create_contact for '{firstname}'")
+        return None
     props: dict = {"firstname": firstname}
     if lastname:
         props["lastname"] = lastname
@@ -746,6 +760,9 @@ def associate_contact_to_deal(contact_id: str, deal_id: str) -> bool:
     """Associate an existing contact to a deal."""
     if not hs_available() or not contact_id or not deal_id:
         return False
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping associate_contact_to_deal deal={deal_id}")
+        return False
     url = (
         f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
         f"/associations/contacts/{contact_id}/deal_to_contact"
@@ -777,6 +794,9 @@ def update_deal_properties(deal_id: str, properties: dict) -> bool:
     """
     if not hs_available() or not deal_id or not properties:
         return False
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping update_deal_properties for {deal_id}")
+        return False
     _pending_deal_updates.append({"id": deal_id, "properties": dict(properties)})
     logger.debug(f"Queued deal {deal_id} property update: {list(properties.keys())}")
     return True
@@ -790,6 +810,10 @@ def flush_deal_property_updates() -> None:
     Safe to call multiple times — the buffer is cleared on first call.
     """
     global _pending_deal_updates
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping flush of {len(_pending_deal_updates)} pending updates")
+        _pending_deal_updates = []
+        return
     if not _pending_deal_updates:
         return
 
@@ -835,6 +859,9 @@ def create_note_on_deal(deal_id: str, note_body: str, *, immediate: bool = False
     None when buffered (ID is unavailable until flush).
     """
     if not hs_available() or not deal_id or not note_body:
+        return None
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping create_note_on_deal for {deal_id}")
         return None
 
     if not immediate:
@@ -884,6 +911,10 @@ def flush_notes() -> None:
     Safe to call multiple times — the buffer is cleared on first call.
     """
     global _pending_notes
+    if not _writes_enabled():
+        logger.info(f"HubSpot writes disabled — skipping flush of {len(_pending_notes)} pending notes")
+        _pending_notes = []
+        return
     if not _pending_notes:
         return
     pending = _pending_notes

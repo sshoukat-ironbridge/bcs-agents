@@ -414,6 +414,9 @@ def init_db() -> None:
                 # Dialpad integration
                 "dialpad_api_key":           "",
                 "dialpad_api_base_url":      "https://dialpad.com/api/v2",
+                # HubSpot write protection — default OFF so no writes go out on first deploy
+                "hubspot_writes_enabled":    "false",
+                "hubspot_writes_toggled_at": "",
             }
             for key, default_val in _hs_defaults.items():
                 existing = conn.execute(
