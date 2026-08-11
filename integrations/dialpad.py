@@ -47,13 +47,11 @@ def get_dialpad_user_id(pm_name: str) -> "str | None":
 
 
 def _parse_contact_date(ts) -> "date | None":
+    """Parse a Dialpad timestamp to a date. Dialpad always returns millisecond epochs."""
     if not ts:
         return None
     try:
-        if isinstance(ts, (int, float)):
-            epoch = ts / 1000 if ts > 1e10 else ts
-            return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
-        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+        return datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).date()
     except Exception:
         return None
 
@@ -93,7 +91,7 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
             f"{base_url}/call",
             headers=headers,
             params={"user_id": user_id, "limit": 50},
-            timeout=10,
+            timeout=30,
         )
         logger.info(f"Dialpad /call response for {pm_name}: status={resp.status_code} body={resp.text[:200]}")
         if resp.status_code == 401:
@@ -124,8 +122,17 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
 
             ts = (item.get("date_started") or item.get("started_at")
                   or item.get("date_created") or item.get("created_at"))
-            contact_date = _parse_contact_date(ts)
-            if contact_date and (best_date is None or contact_date > best_date):
+            if not ts:
+                continue
+            try:
+                contact_date = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).date()
+            except Exception as e:
+                logger.error(
+                    f"Dialpad date parse failed for call_id={item.get('call_id')}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                continue
+            if best_date is None or contact_date > best_date:
                 best_date = contact_date
 
     except requests.RequestException as e:
