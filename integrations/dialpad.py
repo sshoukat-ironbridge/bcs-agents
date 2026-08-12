@@ -87,13 +87,18 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
     best_date: "date | None" = None
 
     try:
+        params = {"target_id": user_id, "target_type": "user", "limit": 50}
         resp = requests.get(
             f"{base_url}/call",
             headers=headers,
-            params={"user_id": user_id, "limit": 50},
+            params=params,
             timeout=30,
         )
-        logger.info(f"Dialpad /call response for {pm_name}: status={resp.status_code} body={resp.text[:200]}")
+        logger.info(
+            f"Dialpad /call request for {pm_name}: "
+            f"target_id={user_id} target_type=user — "
+            f"status={resp.status_code} body={resp.text[:200]}"
+        )
         if resp.status_code == 401:
             logger.error("Dialpad: invalid API key (401)")
             return None
@@ -103,6 +108,10 @@ def fetch_dialpad_contact_history(pm_name: str, customer_phone: str) -> "dict | 
 
         items = resp.json().get("items") or []
         for item in items:
+            # Only outbound calls count as PM-initiated contact
+            if item.get("direction") != "outbound":
+                continue
+
             # Match against the three phone fields present in Dialpad call records
             candidates = []
             if item.get("external_number"):
