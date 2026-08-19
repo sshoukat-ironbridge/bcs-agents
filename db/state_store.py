@@ -1684,6 +1684,10 @@ def set_comms_hold(job_id: int, reason: str, hold_until: "date | None" = None) -
             row.comms_hold_reason = reason.strip()
             row.comms_hold_set_at = datetime.now(timezone.utc)
             row.comms_hold_until = hold_until
+            if row.escalation_flag:
+                row.escalation_flag = False
+                row.escalation_reason = None
+                logger.info(f"Cleared stale escalation for job_id={job_id} — manual comms_hold set")
             s.commit()
             return True
     except Exception as e:
