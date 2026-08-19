@@ -927,6 +927,12 @@ def upsert_active_job(job: dict) -> None:
                           "job_description", "estimator_name", "to_collect", "total_project",
                           "sheet_tab", "deadline_to_start", "pm_name"):
                 existing[field] = job.get(field)
+            if "comms_hold" in job:
+                existing["comms_hold"] = job["comms_hold"]
+                existing["comms_hold_reason"] = job.get("comms_hold_reason")
+                if job["comms_hold"] and existing.get("escalation_flag"):
+                    existing["escalation_flag"] = False
+                    existing["escalation_reason"] = None
             existing["synced_at"] = now
         else:
             _memory_jobs[key] = {**job, "last_customer_update_sent": None,
@@ -979,6 +985,10 @@ def upsert_active_job(job: dict) -> None:
                     row.comms_hold_reason = job.get("comms_hold_reason")
                     if job["comms_hold"] and not row.comms_hold_set_at:
                         row.comms_hold_set_at = now
+                    if job["comms_hold"] and row.escalation_flag:
+                        row.escalation_flag = False
+                        row.escalation_reason = None
+                        logger.info(f"Cleared stale escalation for {client_name} — job is on comms_hold")
                 # Only overwrite hubspot_contact_id if provided
                 if job.get("hubspot_contact_id"):
                     row.hubspot_contact_id = job["hubspot_contact_id"]
