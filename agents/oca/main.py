@@ -57,14 +57,6 @@ from config.loader import cfg
 logger = get_logger("oca")
 
 
-def normalize_pm_name(pm_name: str) -> str:
-    """Normalize PM name for consistent matching; handles casing variants like FERNANDA."""
-    name = pm_name.strip().title()
-    if name.upper() == "FERNANDA":
-        return "Fernanda"
-    return name
-
-
 _ALL_FLAG_TYPES = [
     "stale_record",
     "missing_pm",
@@ -250,6 +242,8 @@ def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
                 "sheet_tab":              job.get("sheet_tab", ""),
                 "deadline_to_start":      job.get("deadline_to_start", ""),
                 "primary_job_type":       job.get("primary_job_type", ""),
+                "comms_hold":             job.get("comms_hold", False),
+                "comms_hold_reason":      job.get("comms_hold_reason"),
             })
             synced += 1
         except Exception as e:
@@ -281,7 +275,7 @@ def _fetch_email_histories(sheet_jobs: list, pm_config: list) -> None:
     rest of the OCA run — at worst they fall back to the sheet's "Most Recent
     communication" column and/or a once-daily DM to Josh.
     """
-    pm_email_map = {normalize_pm_name(pm.get("full_name", "")): pm.get("email", "") for pm in pm_config}
+    from db.state_store import find_pm
     now = datetime.now(timezone.utc)
 
     for job in sheet_jobs:
@@ -296,7 +290,8 @@ def _fetch_email_histories(sheet_jobs: list, pm_config: list) -> None:
             logger.info(f"Email history for {client_name} fetched within 23h — using cached value")
             continue
 
-        pm_email = pm_email_map.get(normalize_pm_name(pm_name), "")
+        pm_row = find_pm(pm_name, pm_config)
+        pm_email = pm_row.get("email", "") if pm_row else ""
         if not pm_email:
             logger.warning(f"Email history skip for {client_name} — PM '{pm_name}' has no email in pm_config")
             continue

@@ -6,10 +6,6 @@ from utils.logger import get_logger
 logger = get_logger("integrations.dialpad")
 
 
-def _normalize_pm_name(pm_name: str) -> str:
-    return pm_name.strip().title()
-
-
 def _clean_phone(phone: str) -> str:
     """Return last 10 digits of a phone string for comparison."""
     digits = re.sub(r"\D", "", phone)
@@ -35,12 +31,11 @@ def _base_url() -> str:
 
 def get_dialpad_user_id(pm_name: str) -> "str | None":
     try:
-        from db.state_store import get_pm_list
-        normalized = _normalize_pm_name(pm_name)
-        for pm in get_pm_list():
-            if _normalize_pm_name(pm.get("full_name", "")) == normalized:
-                uid = (pm.get("dialpad_user_id") or "").strip()
-                return uid or None
+        from db.state_store import find_pm
+        pm = find_pm(pm_name)
+        if pm:
+            uid = (pm.get("dialpad_user_id") or "").strip()
+            return uid or None
     except Exception as e:
         logger.error(f"get_dialpad_user_id({pm_name}): {e}")
     return None

@@ -532,6 +532,46 @@ def get_pm_list() -> list:
         return []
 
 
+# Maps known legacy sheet name variants (lowercase) to the pm_config.name they should resolve to.
+# Add a new entry here when a PM is referenced by a new alias or full name in the Google Sheet.
+_PM_NAME_ALIASES: dict[str, str] = {
+    "andrea ortega":        "Andrea",
+    "antonio cavaliere":    "Antonio",
+    "carlos matus":         "Carlos",
+    "daniel gomez":         "Daniel",
+    "daniel gomez cortez":  "Daniel",
+    "esteban estarita":     "Esteban",
+    "laura arbelaez":       "Fernanda",   # pm_config.name for Laura Arbelaez is "Fernanda"
+    "julie martinez":       "Julie",
+    "jorge armella":        "Jorge",
+    "santiago arango":      "Santiago",
+    "laura pena":           "Laura",
+    "laura peña":           "Laura",
+    "gustavo zuluaga":      "Gustavo",
+}
+
+
+def find_pm(pm_name: str, pm_list: "list | None" = None) -> "dict | None":
+    """Return the pm_config row matching pm_name, or None.
+
+    Matching is case-insensitive and recognises both the pm_config.name (short form,
+    e.g. 'Andrea') and any alias in _PM_NAME_ALIASES (e.g. 'Andrea Ortega',
+    'ANDREA ORTEGA', 'andrea ortega').  Pass pm_list to avoid a DB round-trip
+    inside a loop.  To add a new alias, edit _PM_NAME_ALIASES — one place, done.
+    """
+    if not pm_name or not pm_name.strip():
+        return None
+    if pm_list is None:
+        pm_list = get_pm_list()
+    key = pm_name.strip().lower()
+    canonical = _PM_NAME_ALIASES.get(key)
+    target = (canonical or pm_name.strip()).lower()
+    for pm in pm_list:
+        if pm.get("full_name", "").strip().lower() == target:
+            return pm
+    return None
+
+
 def add_pm(name: str, email: str, slack_user_id: str, display_note: str = "", dialpad_user_id: str = "") -> None:
     if not _db_available:
         return

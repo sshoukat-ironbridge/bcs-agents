@@ -62,25 +62,14 @@ MOCK_JOB = {
 }
 
 
-def normalize_pm_name(pm_name: str) -> str:
-    """Normalize PM name for consistent matching; handles casing variants like FERNANDA."""
-    name = pm_name.strip().title()
-    if name.upper() == "FERNANDA":
-        return "Fernanda"
-    return name
-
-
 def _get_pm_email(pm_name: str) -> str:
     """Look up PM's email from pm_config table."""
-    normalized = normalize_pm_name(pm_name)
     try:
-        from db.state_store import get_pm_list
-        for pm in get_pm_list():
-            if normalize_pm_name(pm.get("full_name", "")) == normalized:
-                return pm.get("email", "")
+        from db.state_store import find_pm
+        pm = find_pm(pm_name)
+        return pm.get("email", "") if pm else ""
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _get_sales_rep_email(estimator_name: str, hubspot_owner_name: str = "") -> str:
@@ -428,6 +417,8 @@ def _run(run_id: "int | None" = None) -> str:
             "to_collect":             job.get("to_collect", ""),
             "total_project":          job.get("total_project", ""),
             "sheet_tab":              job.get("sheet_tab", ""),
+            "comms_hold":             job.get("comms_hold", False),
+            "comms_hold_reason":      job.get("comms_hold_reason"),
         })
         synced += 1
 

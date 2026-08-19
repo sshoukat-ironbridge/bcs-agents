@@ -150,20 +150,13 @@ _HOLD_PM_VALUES = {"construction", "permits", "dan", "tatiana"}
 
 
 def is_valid_pm(pm_name: str, pm_config: list) -> bool:
-    """True if pm_name is non-empty and matches a known PM's full_name in pm_config.
+    """True if pm_name resolves to a known PM via find_pm().
 
     Used by OCA's check_missing_pm to flag jobs with no recognised PM, and by
     Casey to decide whether a job has someone to send the customer-update email as.
     """
-    name = (pm_name or "").strip().title()
-    if not name:
-        return False
-    if name.upper() == "FERNANDA":
-        name = "Fernanda"
-    return any(
-        pm.get("full_name", "").strip().title() == name
-        for pm in pm_config
-    )
+    from db.state_store import find_pm
+    return find_pm(pm_name, pm_config) is not None
 
 
 def _row_to_job(row: dict, sheet_tab: str) -> "dict[str, Any] | None":
