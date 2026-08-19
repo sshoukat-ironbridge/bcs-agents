@@ -140,7 +140,13 @@ def parse_latest_date(cell_value: str) -> "date | None":
     return best
 
 
-_INVALID_PM_VALUES = {"construction", "estimating", "sales", ""}
+_INVALID_PM_VALUES = {"estimating", "sales"}
+
+# Raw PM cell values (case-insensitive) that indicate an intentional routing/hold state.
+# Jobs matching these get pm_name="" and comms_hold=True so all agents skip them silently.
+# "HOLD/<anything>" prefix is also matched (e.g. HOLD/Antonio, HOLD/DAN).
+# Contrast with _INVALID_PM_VALUES: those are genuinely missing data that still need a human fix.
+_HOLD_PM_VALUES = {"construction", "permits", "dan", "tatiana"}
 
 
 def is_valid_pm(pm_name: str, pm_config: list) -> bool:
@@ -172,12 +178,30 @@ def _row_to_job(row: dict, sheet_tab: str) -> "dict[str, Any] | None":
     if not client:
         return None
 
-    pm_raw = normalize_pm_name(col("project manager"))
-    if pm_raw.strip().lower() in _INVALID_PM_VALUES:
-        logger.info(f"Row for client '{client}' has no valid PM name (raw='{pm_raw}')")
+    raw_pm_cell = col("project manager")
+    raw_key = raw_pm_cell.lower()
+
+    if raw_key in _HOLD_PM_VALUES or raw_key.startswith("hold/"):
+        # Intentional routing/hold marker — not a real PM. Suppress all processing.
+        logger.info(f"Row for client '{client}' has hold PM value (raw='{raw_pm_cell}') — setting comms_hold=True")
         pm_name = ""
+        comms_hold = True
+        comms_hold_reason = f"Sheet PM cell: '{raw_pm_cell}'"
+    elif raw_key in _INVALID_PM_VALUES:
+        # Non-PM label (e.g. "estimating", "sales") — missing data, not an intentional hold.
+        logger.info(f"Row for client '{client}' has invalid PM label (raw='{raw_pm_cell}')")
+        pm_name = ""
+        comms_hold = False
+        comms_hold_reason = None
+    elif not raw_key:
+        # Genuinely blank — real missing data. Let check_missing_pm flag it; do NOT hold.
+        pm_name = ""
+        comms_hold = False
+        comms_hold_reason = None
     else:
-        pm_name = pm_raw
+        pm_name = normalize_pm_name(raw_pm_cell)
+        comms_hold = False
+        comms_hold_reason = None
 
     # PRIMARY JOB TYPE is the canonical source; fall back to SECONDARY JOB TYPE
     # if primary is blank; combine as "Primary - Secondary" when both are present.
@@ -191,6 +215,8 @@ def _row_to_job(row: dict, sheet_tab: str) -> "dict[str, Any] | None":
     return {
         "client_name":              client,
         "pm_name":                  pm_name,
+        "comms_hold":               comms_hold,
+        "comms_hold_reason":        comms_hold_reason,
         "job_type":                 job_type,
         "primary_job_type":         primary_type,
         "start_date":               col("start date"),

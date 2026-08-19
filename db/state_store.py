@@ -932,6 +932,13 @@ def upsert_active_job(job: dict) -> None:
                 row.sheet_tab = job.get("sheet_tab")
                 row.deadline_to_start = job.get("deadline_to_start")
                 row.synced_at = now
+                # Sheet-driven comms hold: written on every sync so hold clears
+                # automatically when the PM cell returns to a real name.
+                if "comms_hold" in job:
+                    row.comms_hold = job["comms_hold"]
+                    row.comms_hold_reason = job.get("comms_hold_reason")
+                    if job["comms_hold"] and not row.comms_hold_set_at:
+                        row.comms_hold_set_at = now
                 # Only overwrite hubspot_contact_id if provided
                 if job.get("hubspot_contact_id"):
                     row.hubspot_contact_id = job["hubspot_contact_id"]
@@ -941,6 +948,7 @@ def upsert_active_job(job: dict) -> None:
                 if not row.next_scheduled_update and job.get("next_scheduled_update"):
                     row.next_scheduled_update = job["next_scheduled_update"]
             else:
+                _hold = job.get("comms_hold", False)
                 session.add(CaseyActiveJob(
                     client_name=client_name,
                     pm_name=pm_name,
@@ -967,6 +975,9 @@ def upsert_active_job(job: dict) -> None:
                     sheet_tab=job.get("sheet_tab"),
                     deadline_to_start=job.get("deadline_to_start"),
                     escalation_flag=False,
+                    comms_hold=_hold,
+                    comms_hold_reason=job.get("comms_hold_reason"),
+                    comms_hold_set_at=now if _hold else None,
                     synced_at=now,
                 ))
             session.commit()
