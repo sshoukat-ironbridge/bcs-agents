@@ -311,7 +311,7 @@ def check_daily_cadence(sheet_jobs: list, contact_date_map: "dict | None" = None
             continue
 
         days_since = (today - last_contact).days
-        if days_since >= 2:
+        if days_since >= 1:
             flagged.append({
                 "client_name":        client_name,
                 "pm_name":            pm_name,
