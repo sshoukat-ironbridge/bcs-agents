@@ -281,6 +281,49 @@ def check_job_readiness(
     return flags
 
 
+def check_daily_cadence(sheet_jobs: list, contact_date_map: "dict | None" = None) -> list[dict[str, Any]]:
+    """Flag In Process jobs where last PM contact is >= 2 days ago, or where no contact date exists.
+
+    No cooldown — re-flags every qualifying job on every run until contact happens.
+    Only considers In Process jobs; To Start jobs are excluded.
+    """
+    contact_date_map = contact_date_map or {}
+    today = date.today()
+    flagged = []
+    for job in sheet_jobs:
+        if job.get("sheet_tab") != "in_process":
+            continue
+        if job.get("comms_hold"):
+            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active (daily cadence check)")
+            continue
+        client_name = job["client_name"]
+        pm_name = job.get("pm_name", "")
+        last_contact = contact_date_map.get(client_name)
+
+        if last_contact is None:
+            flagged.append({
+                "client_name":       client_name,
+                "pm_name":           pm_name,
+                "last_contact_date": None,
+                "days_since_contact": None,
+                "reason":            "No contact date found",
+            })
+            continue
+
+        days_since = (today - last_contact).days
+        if days_since >= 2:
+            flagged.append({
+                "client_name":        client_name,
+                "pm_name":            pm_name,
+                "last_contact_date":  str(last_contact),
+                "days_since_contact": days_since,
+                "reason":             f"{days_since} day{'s' if days_since != 1 else ''} since last contact",
+            })
+
+    logger.info(f"check_daily_cadence: {len(flagged)} In Process jobs flagged")
+    return flagged
+
+
 def check_approaching_deadline(sheet_jobs: list, contact_date_map: "dict | None" = None) -> list[dict[str, Any]]:
     """Flag jobs where last PM contact was exactly 6 days ago — one day before Casey's 7-day backstop trigger."""
     contact_date_map = contact_date_map or {}

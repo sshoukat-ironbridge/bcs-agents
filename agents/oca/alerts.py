@@ -197,6 +197,32 @@ def send_deadline_change_alert(
     _route(build_deadline_change_message(client_name, pm_name, old_deadline, new_deadline, deal_id))
 
 
+def send_daily_cadence_report(flagged_jobs: list[dict[str, Any]]) -> None:
+    """Post a single consolidated daily cadence compliance report to #urgentmatters.
+
+    Lists every In Process job where last PM contact is >= 2 days ago or unknown.
+    Silent mode is handled inside send_message — no extra guard needed here.
+    """
+    from datetime import date
+    if not flagged_jobs:
+        return
+    today_str = date.today().isoformat()
+    n = len(flagged_jobs)
+    lines = [
+        f"📋 *Daily Cadence Compliance Report — {today_str} — {n} job{'s' if n != 1 else ''} flagged*",
+        "",
+    ]
+    for job in flagged_jobs:
+        last_contact = job.get("last_contact_date") or "No contact found"
+        pm = job.get("pm_name") or "Unassigned"
+        lines.append(
+            f"• Client: {job['client_name']} | PM: {pm} | "
+            f"Last contact: {last_contact} | "
+            f"Action: PM should contact today per daily cadence standard"
+        )
+    send_message(_get_urgentmatters_channel(), "\n".join(lines))
+
+
 def send_approaching_deadline_notifications(approaching_jobs: list[dict[str, Any]]) -> None:
     """Send one combined Slack message to #urgentmatters and one email to Chris for jobs at day 6."""
     if not approaching_jobs:

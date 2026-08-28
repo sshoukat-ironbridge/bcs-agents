@@ -10,11 +10,13 @@ from agents.oca.checks import (
     check_dropped_invoices,
     check_job_readiness,
     check_approaching_deadline,
+    check_daily_cadence,
     _flag,
 )
 from agents.oca.alerts import (
     send_deadline_change_alert,
     send_no_email_history_alert,
+    send_daily_cadence_report,
 )
 from db.state_store import (
     init_db,
@@ -498,6 +500,11 @@ def _run(run_id: "int | None" = None) -> str:
         _db = db_jobs.get(_job["client_name"], {})
         _job["comms_hold"] = _db.get("comms_hold", False)
         _job["comms_hold_reason"] = _db.get("comms_hold_reason", "")
+
+    # ── Step 2d: Daily cadence compliance report (In Process jobs only) ──────
+    cadence_flags = check_daily_cadence(sheet_jobs, contact_date_map)
+    _checkpoint(run_id, f"Daily cadence: {len(cadence_flags)} In Process job(s) flagged")
+    send_daily_cadence_report(cadence_flags)
 
     # ── Step 3: Run checks ───────────────────────────────────────────────────
     stale_flags          = check_stale_records(sheet_jobs, contact_date_map)
