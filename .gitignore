@@ -11,3 +11,5 @@ build/
 venv/
 *.log
 .DS_Store
+/out/
+.pytest_cache/
