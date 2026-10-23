@@ -125,8 +125,6 @@
             <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-100">⏰ Due for Update</span>
             {% elif job.status == 'Stale' %}
             <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 ring-1 ring-red-100">⚠ Stale</span>
-            {% elif job.status == 'Escalated' %}
-            <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 ring-1 ring-red-100">🔴 Escalated</span>
             {% else %}
             <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600 ring-1 ring-slate-200">{{ job.status }}</span>
             {% endif %}

@@ -6,7 +6,7 @@
 {% block content %}
 
 <!-- Stat cards -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5 hover:shadow-md transition-shadow duration-200">
     <div class="flex items-start justify-between mb-3">
       <div class="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center">
@@ -30,18 +30,6 @@
     <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Due for Update</div>
     <div class="text-3xl font-extrabold text-amber-500 tracking-tight">{{ stats.jobs_due_for_update }}</div>
     <div class="text-xs text-slate-400 mt-1">Casey queue</div>
-  </div>
-  <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5 hover:shadow-md transition-shadow duration-200">
-    <div class="flex items-start justify-between mb-3">
-      <div class="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center">
-        <svg class="w-4.5 h-4.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/>
-        </svg>
-      </div>
-    </div>
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Escalations</div>
-    <div class="text-3xl font-extrabold text-red-500 tracking-tight">{{ stats.escalations_this_week }}</div>
-    <div class="text-xs text-slate-400 mt-1">Active</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5 hover:shadow-md transition-shadow duration-200">
     <div class="flex items-start justify-between mb-3">
@@ -82,16 +70,8 @@
     <div class="text-xs text-slate-500 mb-1">{{ casey_run.summary }}</div>
     {% endif %}
     {% if casey_run %}
-    <div class="text-xs mb-4"><a href="/runs/{{ casey_run.id }}" class="text-indigo-600 font-medium hover:text-indigo-700 hover:underline">View Full Log →</a></div>
-    {% else %}
-    <div class="mb-4"></div>
+    <div class="text-xs"><a href="/runs/{{ casey_run.id }}" class="text-indigo-600 font-medium hover:text-indigo-700 hover:underline">View Full Log →</a></div>
     {% endif %}
-    <div id="casey-run-status">
-      <button hx-post="/agents/casey/run" hx-target="#casey-run-status" hx-swap="innerHTML"
-        class="w-full px-4 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm hover:shadow-md transition-all duration-150">
-        ▶ Run Casey Now
-      </button>
-    </div>
   </div>
 
   <!-- OCA -->
@@ -116,32 +96,10 @@
     <div class="text-xs text-slate-500 mb-1">{{ oca_run.summary }}</div>
     {% endif %}
     {% if oca_run %}
-    <div class="text-xs mb-4"><a href="/runs/{{ oca_run.id }}" class="text-indigo-600 font-medium hover:text-indigo-700 hover:underline">View Full Log →</a></div>
-    {% else %}
-    <div class="mb-4"></div>
+    <div class="text-xs"><a href="/runs/{{ oca_run.id }}" class="text-indigo-600 font-medium hover:text-indigo-700 hover:underline">View Full Log →</a></div>
     {% endif %}
-    <div id="oca-run-status">
-      <button hx-post="/agents/oca/run" hx-target="#oca-run-status" hx-swap="innerHTML"
-        class="w-full px-4 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm hover:shadow-md transition-all duration-150">
-        ▶ Run OCA Now
-      </button>
-    </div>
   </div>
 
-</div>
-
-<!-- Live log window -->
-<div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5 mb-6">
-  <h2 class="text-sm font-semibold text-slate-700 mb-3">Agent Log</h2>
-  <div class="rounded-xl overflow-hidden ring-1 ring-slate-800">
-    <div class="bg-slate-800 px-3.5 py-2 flex items-center gap-1.5">
-      <span class="w-2.5 h-2.5 rounded-full bg-red-400/80"></span>
-      <span class="w-2.5 h-2.5 rounded-full bg-amber-400/80"></span>
-      <span class="w-2.5 h-2.5 rounded-full bg-emerald-400/80"></span>
-    </div>
-    <pre id="agent-log"
-      class="bg-slate-900 text-emerald-400 p-4 text-xs font-mono h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">Waiting for agent run…</pre>
-  </div>
 </div>
 
 <!-- Delete Jobs card -->

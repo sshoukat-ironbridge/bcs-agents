@@ -15,8 +15,6 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templa
 
 
 def _status_for_job(job: dict) -> str:
-    if job.get("escalation_flag"):
-        return "Escalated"
     lpc = job.get("last_pm_contact")
     if lpc:
         if isinstance(lpc, str):
@@ -76,8 +74,6 @@ def _get_jobs_from_db(to_start: bool) -> list[dict]:
                 "last_pm_contact": str(r.last_pm_contact) if r.last_pm_contact else "—",
                 "most_recent_contact": r.most_recent_contact or "",
                 "customer_email": r.customer_email or "",
-                "escalation_flag": r.escalation_flag,
-                "escalation_reason": r.escalation_reason or "",
                 "comms_hold": r.comms_hold or False,
                 "comms_hold_reason": r.comms_hold_reason or "",
                 "comms_hold_set_at": (
@@ -89,7 +85,6 @@ def _get_jobs_from_db(to_start: bool) -> list[dict]:
                     date.today() >= r.comms_hold_until
                 ) if r.comms_hold_until else False,
                 "status": _status_for_job({
-                    "escalation_flag": r.escalation_flag,
                     "last_pm_contact": r.last_pm_contact,
                 }),
             }
