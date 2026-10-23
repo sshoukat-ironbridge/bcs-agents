@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 
 from agents.oca.checks import (
     check_missing_pm,
+    check_deadline_to_start,
+    classify_pm_issues,
+    DEFAULT_DEADLINE_WARNING_DAYS,
 )
+from agents.oca.checklist import build_checklist, send_daily_checklist
 from agents.oca.alerts import (
     send_deadline_change_alert,
 )
@@ -19,6 +23,7 @@ from db.state_store import (
     resolve_flags_not_in,
     upsert_active_job,
     set_config,
+    get_config,
     create_agent_run,
     append_agent_run_log,
     finish_agent_run,
@@ -28,6 +33,7 @@ from db.state_store import (
 from integrations.slack import send_message
 from integrations.sheets import get_active_jobs, parse_latest_date
 from utils.logger import get_logger
+from utils.timeutil import today_ny
 from config.loader import cfg
 
 logger = get_logger("oca")
@@ -135,6 +141,16 @@ def _checkpoint(run_id: "int | None", line: str) -> None:
         append_agent_run_log(run_id, line + "\n")
 
 
+def _get_deadline_warning_days() -> int:
+    """oca_deadline_warning_days from app_config, default/fallback 7."""
+    raw = get_config("oca_deadline_warning_days")
+    try:
+        return int(raw) if raw and raw.strip() else DEFAULT_DEADLINE_WARNING_DAYS
+    except (TypeError, ValueError):
+        logger.warning(f"oca_deadline_warning_days={raw!r} is invalid — falling back to {DEFAULT_DEADLINE_WARNING_DAYS}")
+        return DEFAULT_DEADLINE_WARNING_DAYS
+
+
 def run() -> None:
     # AGENT_RUN_ID is set by the dashboard when it spawns this as a subprocess
     # (it already created the row and owns the live SSE log stream + final
@@ -169,6 +185,7 @@ def run() -> None:
 
 
 def _run(run_id: "int | None" = None) -> str:
+    # ── Guards ────────────────────────────────────────────────────────────
     if not cfg("slack_bot_token"):
         logger.error("OCA: slack_bot_token not configured in DB — aborting")
         return "Aborted: slack_bot_token not configured"
@@ -179,20 +196,21 @@ def _run(run_id: "int | None" = None) -> str:
     logger.info("OCA starting run")
     init_db()
 
-    # ── Step 1: Fetch latest data ────────────────────────────────────────────
+    # ── Read sheet ────────────────────────────────────────────────────────
     sheet_jobs = get_active_jobs()
     if not sheet_jobs:
         logger.error("OCA: No sheet jobs loaded — aborting")
         return "Aborted: no sheet jobs loaded"
-
     logger.info(f"OCA loaded {len(sheet_jobs)} sheet jobs")
     _checkpoint(run_id, f"OCA loaded {len(sheet_jobs)} sheet jobs")
 
-    # ── Step 2: Sync — keep Sheet and local DB aligned ──────────────────────
+    # ── Sync/upsert (PM resolution + HOLD already applied by sheets.py;
+    #    deadline-change collection happens inside _sync_all) ───────────────
     sync_summary = _sync_all(sheet_jobs)
+    deadline_changes = sync_summary.get("deadline_changes", [])
     _checkpoint(run_id, f"Sync: {sync_summary.get('synced', 0)} jobs upserted, {sync_summary.get('errors', 0)} errors")
 
-    # ── Step 2b: Reconciliation — retire jobs no longer present in sheet ────
+    # ── Retire jobs no longer present in sheet ───────────────────────────
     sheet_keys = {
         (j["client_name"], j.get("sheet_tab", ""), j.get("primary_job_type", ""))
         for j in sheet_jobs if j["client_name"].strip()
@@ -211,29 +229,21 @@ def _run(run_id: "int | None" = None) -> str:
         _job["comms_hold"] = _db.get("comms_hold", False)
         _job["comms_hold_reason"] = _db.get("comms_hold_reason", "")
 
-    # ── Step 3: Run checks ───────────────────────────────────────────────────
+    # ── Checks ────────────────────────────────────────────────────────────
+    # check_missing_pm's existing flag code path (dedup/cooldown via
+    # oca_flags) is untouched — same as before this stage.
     missing_pm_flags = check_missing_pm(sheet_jobs)
-
     _checkpoint(run_id, f"Checks: missing_pm={len(missing_pm_flags)}")
 
-    all_flags: list[dict] = list(missing_pm_flags)
-
-    logger.info(f"OCA detected {len(all_flags)} flags total")
-    _checkpoint(run_id, f"OCA detected {len(all_flags)} flags total")
-
-    # ── Step 4: Process flags with deduplication + cooldown ─────────────────
-    alerted = 0
-    suppressed = 0
-
-    # Group flags by job_id so cooldown checks are per-job
     flags_by_job: dict[str, list[dict]] = defaultdict(list)
-    for flag in all_flags:
+    for flag in missing_pm_flags:
         flags_by_job[flag["job_id"]].append(flag)
 
+    alerted = 0
+    suppressed = 0
     for job_id, job_flags in flags_by_job.items():
         for flag in job_flags:
             flag_type = flag["flag_type"]
-
             if flag_exists(job_id, flag_type):
                 if should_alert_again(job_id, flag_type, cooldown_hours=24):
                     update_flag_alerted(job_id, flag_type)
@@ -245,12 +255,41 @@ def _run(run_id: "int | None" = None) -> str:
                 create_flag(job_id, flag_type, flag.get("details", ""), flag.get("urgency", ""))
                 alerted += 1
 
-    # ── Step 5: Auto-resolve flags ───────────────────────────────────────────
     for flag_type in _ALL_FLAG_TYPES:
-        flagged_ids = [f["job_id"] for f in all_flags if f["flag_type"] == flag_type]
+        flagged_ids = [f["job_id"] for f in missing_pm_flags if f["flag_type"] == flag_type]
         resolve_flags_not_in(flagged_ids, flag_type)
 
-    run_summary = f"{len(all_flags)} flags detected, {alerted} alerted, {suppressed} suppressed"
+    # New daily-checklist-only checks (pure functions, fresh snapshot of
+    # the current sheet rows — not sourced from oca_flags).
+    warning_days = _get_deadline_warning_days()
+    deadline_result = check_deadline_to_start(sheet_jobs, today_ny(), warning_days=warning_days)
+    pm_issues = classify_pm_issues(sheet_jobs)
+    _checkpoint(
+        run_id,
+        f"Checklist checks: deadline_changes={len(deadline_changes)}, overdue={len(deadline_result['overdue'])}, "
+        f"soon={len(deadline_result['soon'])}, blank_pm={len(pm_issues['blank'])}, "
+        f"unrecognized_pm={len(pm_issues['unrecognized'])}",
+    )
+
+    # ── Build checklist ───────────────────────────────────────────────────
+    counts = {
+        "to_start": sum(1 for j in sheet_jobs if j.get("sheet_tab") == "to_start"),
+        "in_process": sum(1 for j in sheet_jobs if j.get("sheet_tab") == "in_process"),
+        "on_hold": sum(1 for j in sheet_jobs if j.get("comms_hold")),
+        "retired_this_run": retired,
+    }
+    checklist = build_checklist(deadline_changes, deadline_result, pm_issues, counts, warning_days)
+
+    # ── Deliver ───────────────────────────────────────────────────────────
+    send_daily_checklist(checklist)
+
+    # ── Log summary ───────────────────────────────────────────────────────
+    run_summary = (
+        f"missing_pm: {alerted} alerted/{suppressed} suppressed; "
+        f"checklist: {len(deadline_changes)} deadline changes, "
+        f"{len(deadline_result['overdue'])} overdue, {len(deadline_result['soon'])} soon, "
+        f"{len(pm_issues['blank'])} no PM, {len(pm_issues['unrecognized'])} unrecognized PM"
+    )
     logger.info(f"OCA run complete — {run_summary}")
     _checkpoint(run_id, f"OCA run complete — {run_summary}")
 
