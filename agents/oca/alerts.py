@@ -143,30 +143,6 @@ def send_deal_not_found_alert(flag: dict[str, Any]) -> None:
     _route(build_deal_not_found_message(flag))
 
 
-def build_no_email_history_message(
-    client_name: str,
-    pm_name: str,
-    pm_email: str,
-    customer_email: str,
-) -> str:
-    return (
-        f"⚠️ *No Email History Found*\n"
-        f"Customer: {client_name}\n"
-        f"PM: {pm_name}\n"
-        f"Reason: No emails found in {pm_email} sent folder to {customer_email}\n"
-        f"Action: Verify PM has contacted this customer"
-    )
-
-
-def send_no_email_history_alert(
-    client_name: str,
-    pm_name: str,
-    pm_email: str,
-    customer_email: str,
-) -> None:
-    _route(build_no_email_history_message(client_name, pm_name, pm_email, customer_email))
-
-
 def build_deadline_change_message(
     client_name: str,
     pm_name: str,

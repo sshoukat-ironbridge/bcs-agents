@@ -1241,45 +1241,6 @@ def get_email_history(client_name: str, pm_name: str) -> "CustomerEmailHistory |
         return None
 
 
-def upsert_email_history(
-    client_name: str,
-    pm_name: str,
-    customer_email: str,
-    last_sent_at: "date | None",
-    last_sent_subject: str,
-    email_snippets: str,
-    fetched_at: datetime,
-) -> None:
-    if not _db_available:
-        return
-    try:
-        with _Session() as session:
-            row = (
-                session.query(CustomerEmailHistory)
-                .filter_by(client_name=client_name, pm_name=pm_name or "")
-                .first()
-            )
-            if row:
-                row.customer_email = customer_email
-                row.last_sent_at = last_sent_at
-                row.last_sent_subject = last_sent_subject
-                row.email_snippets = email_snippets
-                row.fetched_at = fetched_at
-            else:
-                session.add(CustomerEmailHistory(
-                    client_name=client_name,
-                    pm_name=pm_name or "",
-                    customer_email=customer_email,
-                    last_sent_at=last_sent_at,
-                    last_sent_subject=last_sent_subject,
-                    email_snippets=email_snippets,
-                    fetched_at=fetched_at,
-                ))
-            session.commit()
-    except Exception as e:
-        logger.error(f"DB error in upsert_email_history ({client_name}): {e}")
-
-
 def get_dialpad_history(client_name: str, pm_name: str) -> "DialpadContactHistory | None":
     if not _db_available:
         return None
@@ -1333,28 +1294,6 @@ def upsert_dialpad_history(
             session.commit()
     except Exception as e:
         logger.error(f"DB error in upsert_dialpad_history ({client_name}): {e}")
-
-
-def should_fetch_email_history(client_name: str, pm_name: str) -> bool:
-    """True if no row exists yet, or the row's fetched_at is more than 23 hours old."""
-    if not _db_available:
-        return True
-    try:
-        with _Session() as session:
-            row = (
-                session.query(CustomerEmailHistory)
-                .filter_by(client_name=client_name, pm_name=pm_name or "")
-                .first()
-            )
-            if not row or row.fetched_at is None:
-                return True
-            fetched_at = row.fetched_at
-            if fetched_at.tzinfo is None:
-                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-            return fetched_at < datetime.now(timezone.utc) - timedelta(hours=23)
-    except Exception as e:
-        logger.error(f"DB error in should_fetch_email_history ({client_name}): {e}")
-        return True
 
 
 # --- Casey alert deduplication (unchanged) ---

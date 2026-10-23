@@ -13,7 +13,6 @@ from agents.oca.checks import (
 )
 from agents.oca.alerts import (
     send_deadline_change_alert,
-    send_no_email_history_alert,
     send_daily_cadence_report,
 )
 from db.state_store import (
@@ -23,13 +22,9 @@ from db.state_store import (
     should_alert_again,
     update_flag_alerted,
     get_flag_alert_age_hours,
-    resolve_flag,
     resolve_flags_not_in,
     upsert_active_job,
     set_config,
-    get_email_history,
-    upsert_email_history,
-    should_fetch_email_history,
     create_agent_run,
     append_agent_run_log,
     finish_agent_run,
@@ -37,8 +32,7 @@ from db.state_store import (
     reconcile_retired_jobs,
 )
 from integrations.slack import send_message
-from integrations.sheets import get_active_jobs, parse_latest_date
-from integrations.gmail import get_pm_customer_email_history
+from integrations.sheets import get_active_jobs
 from utils.logger import get_logger
 from config.loader import cfg
 
@@ -129,133 +123,6 @@ def _sync_all(sheet_jobs: list) -> dict:
     return {"synced": synced, "errors": errors}
 
 
-def _fetch_email_histories(sheet_jobs: list, pm_config: list) -> None:
-    """
-    Fetch and cache each job's PM→customer Gmail sent-history.
-
-    Used by _build_contact_date_map() for staleness checks and by Casey for
-    LLM context. Gmail failures (or zero emails ever found) never block the
-    rest of the OCA run — at worst they fall back to the sheet's "Most Recent
-    communication" column and/or a once-daily DM to Josh.
-    """
-    from db.state_store import find_pm
-    now = datetime.now(timezone.utc)
-
-    for job in sheet_jobs:
-        client_name = job["client_name"]
-        if not client_name.strip():
-            continue
-        pm_name = job.get("pm_name", "")
-        job_id = f"{client_name}|{pm_name}"
-        customer_email = job.get("email", "").strip()
-
-        if not should_fetch_email_history(client_name, pm_name):
-            logger.info(f"Email history for {client_name} fetched within 23h — using cached value")
-            continue
-
-        pm_row = find_pm(pm_name, pm_config)
-        pm_email = pm_row.get("email", "") if pm_row else ""
-        if not pm_email:
-            logger.warning(f"Email history skip for {client_name} — PM '{pm_name}' has no email in pm_config")
-            continue
-
-        if not customer_email:
-            logger.warning(f"Email history skip for {client_name} — no customer email on file")
-            continue
-
-        prior = get_email_history(client_name, pm_name)
-        since = prior.fetched_at if prior else None
-
-        result = get_pm_customer_email_history(pm_email, customer_email, since=since)
-
-        if result:
-            upsert_email_history(
-                client_name, pm_name, customer_email,
-                result["last_sent_at"], result["last_sent_subject"],
-                result["email_snippets"], now,
-            )
-            resolve_flag(job_id, "no_email_history")
-            logger.info(
-                f"Email history fetched for {client_name}: "
-                f"last sent {result['last_sent_at']}, {result['total_found']} emails found"
-            )
-        elif prior:
-            logger.info(f"Gmail returned no new emails for {client_name}, using cached history")
-            upsert_email_history(
-                client_name, pm_name, prior.customer_email or customer_email,
-                prior.last_sent_at, prior.last_sent_subject, prior.email_snippets, now,
-            )
-        else:
-            logger.warning(f"No email history found for {client_name} — Gmail returned zero emails")
-            flag_type = "no_email_history"
-            if flag_exists(job_id, flag_type):
-                if should_alert_again(job_id, flag_type, cooldown_hours=24):
-                    update_flag_alerted(job_id, flag_type)
-                    send_no_email_history_alert(client_name, pm_name, pm_email, customer_email)
-            else:
-                create_flag(job_id, flag_type, f"No emails found in {pm_email} sent folder to {customer_email}", "warning")
-                send_no_email_history_alert(client_name, pm_name, pm_email, customer_email)
-
-
-def _fetch_dialpad_histories(sheet_jobs: list) -> None:
-    """Fetch and cache Dialpad call/text history for each job that has a customer phone."""
-    from integrations.dialpad import get_dialpad_contact_date
-    fetched = 0
-    for job in sheet_jobs:
-        client_name = job["client_name"]
-        if not client_name.strip():
-            continue
-        customer_phone = (job.get("customer_phone") or "").strip()
-        if not customer_phone:
-            continue
-        pm_name = job.get("pm_name", "")
-        get_dialpad_contact_date(client_name, pm_name, customer_phone)
-        fetched += 1
-    logger.info(f"Dialpad histories fetched/refreshed for {fetched} jobs")
-
-
-def _build_contact_date_map(sheet_jobs: list) -> dict:
-    """Returns {client_name: last_contact_date | None}.
-
-    Sources in priority: Gmail and Dialpad (most recent wins), then sheet fallback.
-    Both Gmail and Dialpad caches are pre-populated before this function is called.
-    """
-    from integrations.dialpad import get_dialpad_contact_date
-    contact_map: dict = {}
-    for job in sheet_jobs:
-        client_name = job["client_name"]
-        pm_name = job.get("pm_name", "")
-        customer_phone = (job.get("customer_phone") or "").strip()
-
-        history = get_email_history(client_name, pm_name)
-        gmail_date = history.last_sent_at if history and history.last_sent_at else None
-
-        dialpad_date = get_dialpad_contact_date(client_name, pm_name, customer_phone)
-
-        candidates = [d for d in [gmail_date, dialpad_date] if d]
-        if candidates:
-            contact_date = max(candidates)
-            if gmail_date and dialpad_date:
-                source = "gmail" if gmail_date >= dialpad_date else "dialpad"
-            elif gmail_date:
-                source = "gmail"
-            else:
-                source = "dialpad"
-            contact_map[client_name] = contact_date
-            logger.info(f"Contact date for {client_name}: {contact_date} (source: {source})")
-            continue
-
-        sheet_date = parse_latest_date(job.get("sheet_last_contact", ""))
-        if sheet_date:
-            contact_map[client_name] = sheet_date
-            logger.info(f"Contact date for {client_name}: {sheet_date} (source: sheet fallback)")
-            continue
-
-        contact_map[client_name] = None
-        logger.info(f"Contact date for {client_name}: none (no gmail, dialpad, or sheet data)")
-    return contact_map
-
-
 def _checkpoint(run_id: "int | None", line: str) -> None:
     """Append a key log line to this run's agent_runs record, if one exists."""
     if run_id is not None:
@@ -307,9 +174,6 @@ def _run(run_id: "int | None" = None) -> str:
     init_db()
     run_start = datetime.now(timezone.utc)
 
-    from db.state_store import get_pm_list
-    pm_config = get_pm_list()
-
     # ── Step 1: Fetch latest data ────────────────────────────────────────────
     sheet_jobs = get_active_jobs()
     if not sheet_jobs:
@@ -333,11 +197,6 @@ def _run(run_id: "int | None" = None) -> str:
         logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
         _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
 
-    # ── Step 2c: PM↔customer contact history (Gmail + Dialpad) ──────────────
-    _fetch_email_histories(sheet_jobs, pm_config)
-    _fetch_dialpad_histories(sheet_jobs)
-    contact_date_map = _build_contact_date_map(sheet_jobs)
-
     from db.state_store import get_all_active_jobs
     db_jobs = {j["client_name"]: j for j in get_all_active_jobs()}
 
@@ -348,16 +207,16 @@ def _run(run_id: "int | None" = None) -> str:
         _job["comms_hold_reason"] = _db.get("comms_hold_reason", "")
 
     # ── Step 2d: Daily cadence compliance report (In Process jobs only) ──────
-    cadence_flags = check_daily_cadence(sheet_jobs, contact_date_map)
+    cadence_flags = check_daily_cadence(sheet_jobs)
     _checkpoint(run_id, f"Daily cadence: {len(cadence_flags)} In Process job(s) flagged")
     send_daily_cadence_report(cadence_flags)
 
     # ── Step 3: Run checks ───────────────────────────────────────────────────
-    stale_flags          = check_stale_records(sheet_jobs, contact_date_map)
-    missing_pm_flags     = check_missing_pm(sheet_jobs, contact_date_map)
-    crew_flags           = check_unconfirmed_crew(sheet_jobs, contact_date_map)
-    invoice_flags        = check_dropped_invoices(sheet_jobs, contact_date_map)
-    approaching_jobs     = check_approaching_deadline(sheet_jobs, contact_date_map)
+    stale_flags          = check_stale_records(sheet_jobs)
+    missing_pm_flags     = check_missing_pm(sheet_jobs)
+    crew_flags           = check_unconfirmed_crew(sheet_jobs)
+    invoice_flags        = check_dropped_invoices(sheet_jobs)
+    approaching_jobs     = check_approaching_deadline(sheet_jobs)
 
     _checkpoint(
         run_id,
