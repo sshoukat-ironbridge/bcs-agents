@@ -183,3 +183,23 @@ def check_deadline_to_start(sheet_jobs: list, today: date, warning_days: int = D
     return {"overdue": overdue, "soon": soon, "no_deadline_count": no_deadline_count}
 
 
+# Retire guard: skip retiring jobs this run if it would retire more than
+# this many jobs, or more than this fraction of currently-active jobs —
+# either is a sign the sheet fetch was bad (e.g. truncated/partial data),
+# not a real mass-removal from the sheet. Both are constants, per spec.
+MAX_RETIRE_COUNT = 15
+MAX_RETIRE_FRACTION = 0.25
+
+
+def should_skip_retire(candidate_count: int, total_active_count: int) -> bool:
+    """Pure decision — True if retiring candidate_count jobs would exceed
+    either safety threshold. total_active_count is the number of
+    currently-active (non-retired) to_start/in_process jobs; if it's 0,
+    only the absolute-count threshold applies (no fraction to compute)."""
+    if candidate_count > MAX_RETIRE_COUNT:
+        return True
+    if total_active_count > 0 and (candidate_count / total_active_count) > MAX_RETIRE_FRACTION:
+        return True
+    return False
+
+

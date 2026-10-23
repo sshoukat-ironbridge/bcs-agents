@@ -3,6 +3,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import socket
+import ssl
+import time
 from typing import Any
 from dotenv import load_dotenv
 from utils.logger import get_logger
@@ -12,6 +15,33 @@ load_dotenv()
 logger = get_logger("integrations.sheets")
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+
+class SheetFetchError(Exception):
+    """A sheet tab fetch failed (after retries, for retryable errors).
+
+    Distinct from "the tab fetched fine but had no data rows" — callers
+    must not treat this the same as an empty tab (e.g. must not retire
+    jobs on the strength of a failed fetch).
+    """
+
+
+# Retry only transient/transport failures (SSL errors, timeouts, 5xx) —
+# anything else (bad request, auth failure, sheet not found) fails fast.
+_RETRY_DELAYS_SECONDS = (2, 5, 10)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, (ssl.SSLError, socket.timeout, TimeoutError, ConnectionError)):
+        return True
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        return False
+    if isinstance(exc, HttpError):
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        return isinstance(status, int) and status >= 500
+    return False
 
 
 def _load_sa_info() -> dict:
@@ -38,45 +68,71 @@ def get_all_rows(
     spreadsheet_id: str,
     sheet_name: str,
     header_row: int = 1,
+    _sleep=time.sleep,
 ) -> list[dict[str, Any]]:
     """
     Fetch all rows from a sheet tab.
     header_row: 1-based index of the row containing column headers.
     All rows before it are skipped; data rows start immediately after.
+
+    Distinguishes "fetched fine, tab is just empty" (returns []) from
+    "fetch failed" (raises SheetFetchError) — callers must not treat a
+    failure as an empty tab. Transient errors (SSL, timeout, 5xx) are
+    retried up to 3 times with 2s/5s/10s backoff; other errors fail
+    immediately without retrying. `_sleep` is only a seam for tests.
     """
     if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip():
         logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON not set — skipping Sheets fetch")
         return []
 
-    try:
-        service = _get_service()
-        result = (
-            service.spreadsheets()
-            .values()
-            .get(spreadsheetId=spreadsheet_id, range=sheet_name)
-            .execute()
-        )
-        values = result.get("values", [])
-        if not values or len(values) < header_row:
-            logger.info(f"Sheet '{sheet_name}' returned no data")
-            return []
+    last_exc: "Exception | None" = None
+    attempts = len(_RETRY_DELAYS_SECONDS) + 1
 
-        headers = values[header_row - 1]          # 0-indexed
-        data_rows = values[header_row:]            # everything after header row
+    for attempt in range(1, attempts + 1):
+        try:
+            service = _get_service()
+            result = (
+                service.spreadsheets()
+                .values()
+                .get(spreadsheetId=spreadsheet_id, range=sheet_name)
+                .execute()
+            )
+            values = result.get("values", [])
+            if not values or len(values) < header_row:
+                logger.info(f"Sheet '{sheet_name}' returned no data")
+                return []
 
-        rows = [
-            dict(zip(headers, row + [""] * (len(headers) - len(row))))
-            for row in data_rows
-        ]
-        logger.info(f"Fetched {len(rows)} rows from sheet '{sheet_name}' (header_row={header_row})")
-        return rows
+            headers = values[header_row - 1]          # 0-indexed
+            data_rows = values[header_row:]            # everything after header row
 
-    except ValueError as e:
-        logger.warning(f"Sheets config error: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Sheets API error for '{sheet_name}': {e}")
-        return []
+            rows = [
+                dict(zip(headers, row + [""] * (len(headers) - len(row))))
+                for row in data_rows
+            ]
+            logger.info(f"Fetched {len(rows)} rows from sheet '{sheet_name}' (header_row={header_row})")
+            return rows
+
+        except ValueError as e:
+            # Config error (e.g. missing/invalid GOOGLE_SERVICE_ACCOUNT_JSON) —
+            # not a transient fetch failure, but still a failure: the caller
+            # must not treat this as "tab is empty".
+            logger.error(f"Sheets config error for '{sheet_name}': {e}")
+            raise SheetFetchError(f"Sheets config error for '{sheet_name}': {e}") from e
+        except Exception as e:
+            last_exc = e
+            if not _is_retryable(e):
+                logger.error(f"Sheets API error for '{sheet_name}' (not retryable): {e}")
+                raise SheetFetchError(f"Failed to fetch sheet tab '{sheet_name}': {e}") from e
+            if attempt < attempts:
+                delay = _RETRY_DELAYS_SECONDS[attempt - 1]
+                logger.warning(
+                    f"Sheets API error for '{sheet_name}' (attempt {attempt}/{attempts}), "
+                    f"retrying in {delay}s: {e}"
+                )
+                _sleep(delay)
+
+    logger.error(f"Sheets API error for '{sheet_name}' after {attempts} attempts: {last_exc}")
+    raise SheetFetchError(f"Failed to fetch sheet tab '{sheet_name}' after {attempts} attempts: {last_exc}") from last_exc
 
 
 PM_NAME_MAP = {
@@ -246,6 +302,9 @@ def _row_to_job(row: dict, sheet_tab: str) -> "dict[str, Any] | None":
 
 
 def get_active_jobs() -> list[dict[str, Any]]:
+    """Raises SheetFetchError (propagated from get_all_rows) if any
+    configured tab fails to fetch — callers must not swallow this and
+    treat it as "no active jobs"."""
     spreadsheet_id = cfg("google_sheets_id", "GOOGLE_SHEETS_ID")
     if not spreadsheet_id:
         logger.warning("GOOGLE_SHEETS_ID not set — skipping active jobs fetch")
@@ -254,11 +313,7 @@ def get_active_jobs() -> list[dict[str, Any]]:
     jobs: list[dict[str, Any]] = []
 
     for tab_name, sheet_tab in (("To Start", "to_start"), ("In Process", "in_process")):
-        try:
-            rows = get_all_rows(spreadsheet_id, tab_name, header_row=2)
-        except Exception as e:
-            logger.warning(f"Failed to load sheet tab '{tab_name}': {e} — continuing with other tab")
-            continue
+        rows = get_all_rows(spreadsheet_id, tab_name, header_row=2)
         if not rows:
             logger.warning(f"Sheet tab '{tab_name}' returned no rows")
             continue

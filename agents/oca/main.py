@@ -8,6 +8,9 @@ from agents.oca.checks import (
     check_deadline_to_start,
     classify_pm_issues,
     DEFAULT_DEADLINE_WARNING_DAYS,
+    MAX_RETIRE_COUNT,
+    MAX_RETIRE_FRACTION,
+    should_skip_retire,
 )
 from agents.oca.checklist import build_checklist, send_daily_checklist
 from agents.oca.alerts import (
@@ -29,9 +32,10 @@ from db.state_store import (
     finish_agent_run,
     set_agent_run_summary,
     reconcile_retired_jobs,
+    count_retirement_candidates,
 )
 from integrations.slack import send_message
-from integrations.sheets import get_active_jobs, parse_latest_date
+from integrations.sheets import get_active_jobs, parse_latest_date, SheetFetchError
 from utils.logger import get_logger
 from utils.timeutil import today_ny
 from config.loader import cfg
@@ -197,7 +201,14 @@ def _run(run_id: "int | None" = None) -> str:
     init_db()
 
     # ── Read sheet ────────────────────────────────────────────────────────
-    sheet_jobs = get_active_jobs()
+    # A failed fetch (SheetFetchError) must never be treated like an empty
+    # tab — re-raise immediately so run()'s existing crash-alert path fires
+    # and the agent_runs record is marked failed, before any upsert/retire.
+    try:
+        sheet_jobs = get_active_jobs()
+    except SheetFetchError as e:
+        logger.error(f"OCA: sheet fetch failed — aborting before any upsert/retire: {e}")
+        raise
     if not sheet_jobs:
         logger.error("OCA: No sheet jobs loaded — aborting")
         return "Aborted: no sheet jobs loaded"
@@ -210,15 +221,26 @@ def _run(run_id: "int | None" = None) -> str:
     deadline_changes = sync_summary.get("deadline_changes", [])
     _checkpoint(run_id, f"Sync: {sync_summary.get('synced', 0)} jobs upserted, {sync_summary.get('errors', 0)} errors")
 
-    # ── Retire jobs no longer present in sheet ───────────────────────────
+    # ── Retire jobs no longer present in sheet (guarded) ─────────────────
     sheet_keys = {
         (j["client_name"], j.get("sheet_tab", ""), j.get("primary_job_type", ""))
         for j in sheet_jobs if j["client_name"].strip()
     }
-    retired = reconcile_retired_jobs(sheet_keys)
-    if retired:
-        logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
-        _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+    candidate_count, total_active_count = count_retirement_candidates(sheet_keys)
+    retire_guard_triggered = should_skip_retire(candidate_count, total_active_count)
+    if retire_guard_triggered:
+        retired = 0
+        logger.warning(
+            f"Retire guard: skipping retire — {candidate_count} job(s) would be retired "
+            f"out of {total_active_count} active (thresholds: >{MAX_RETIRE_COUNT} count "
+            f"or >{MAX_RETIRE_FRACTION:.0%} of active)"
+        )
+        _checkpoint(run_id, f"Retire guard triggered — skipped retiring {candidate_count} job(s)")
+    else:
+        retired = reconcile_retired_jobs(sheet_keys)
+        if retired:
+            logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+            _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
 
     from db.state_store import get_all_active_jobs
     db_jobs = {j["client_name"]: j for j in get_all_active_jobs()}
@@ -284,8 +306,13 @@ def _run(run_id: "int | None" = None) -> str:
     send_daily_checklist(checklist)
 
     # ── Log summary ───────────────────────────────────────────────────────
+    retire_summary = (
+        f"retire guard SKIPPED {candidate_count}/{total_active_count}"
+        if retire_guard_triggered else f"retired {retired}"
+    )
     run_summary = (
         f"missing_pm: {alerted} alerted/{suppressed} suppressed; "
+        f"{retire_summary}; "
         f"checklist: {len(deadline_changes)} deadline changes, "
         f"{len(deadline_result['overdue'])} overdue, {len(deadline_result['soon'])} soon, "
         f"{len(pm_issues['blank'])} no PM, {len(pm_issues['unrecognized'])} unrecognized PM"

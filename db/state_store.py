@@ -1186,6 +1186,46 @@ def clear_comms_hold(job_id: int) -> bool:
 
 # --- Sheet reconciliation: soft-delete jobs removed from sheet ---
 
+def count_retirement_candidates(sheet_keys: set) -> "tuple[int, int]":
+    """Read-only preview for reconcile_retired_jobs()'s retire guard.
+
+    Returns (candidate_count, total_active_count): how many non-retired
+    to_start/in_process rows would be retired by the given sheet_keys,
+    and how many such rows exist in total right now. Does not mutate
+    anything — safe to call before deciding whether to actually retire.
+    """
+    if not _db_available:
+        active = [
+            job for key, job in _memory_jobs.items()
+            if key[1] in ("in_process", "to_start") and not job.get("retired")
+        ]
+        candidates = sum(1 for key, job in _memory_jobs.items()
+                          if key[1] in ("in_process", "to_start")
+                          and not job.get("retired")
+                          and key not in sheet_keys)
+        return candidates, len(active)
+
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(CaseyActiveJob)
+                .filter(
+                    CaseyActiveJob.sheet_tab.in_(["in_process", "to_start"]),
+                    (CaseyActiveJob.retired == False) | (CaseyActiveJob.retired == None),
+                )
+                .all()
+            )
+            total_active_count = len(rows)
+            candidate_count = sum(
+                1 for row in rows
+                if (row.client_name, row.sheet_tab or "", row.primary_job_type or "") not in sheet_keys
+            )
+            return candidate_count, total_active_count
+    except Exception as e:
+        logger.error(f"DB error in count_retirement_candidates: {e}")
+        return 0, 0
+
+
 def reconcile_retired_jobs(sheet_keys: set) -> int:
     """Retire all non-retired active-tab rows whose (client_name, sheet_tab, primary_job_type)
     key is absent from the current sheet fetch. Returns count of newly retired rows."""
