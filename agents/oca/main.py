@@ -26,7 +26,7 @@ from db.state_store import (
     reconcile_retired_jobs,
 )
 from integrations.slack import send_message
-from integrations.sheets import get_active_jobs
+from integrations.sheets import get_active_jobs, parse_latest_date
 from utils.logger import get_logger
 from config.loader import cfg
 
@@ -43,9 +43,15 @@ def _sync_all(sheet_jobs: list) -> dict:
     OCA sync: keep Google Sheet and local DB aligned.
 
     Also detects Deadline to Start changes (comparing the DB's previously
-    stored value to the sheet's current value) and alerts on them.
+    stored value — read BEFORE this run's upsert — to the sheet's current
+    value) and alerts on them. Both sides are parsed with the shared
+    tolerant date parser (parse_latest_date) before comparing, so a date
+    written in a different but equivalent format doesn't look like a
+    change; the raw sheet strings are still what gets alerted/stored.
 
-    Returns a summary dict of sync counters for the daily digest.
+    Returns a summary dict of sync counters, plus deadline_changes: a list
+    of {client_name, job_type, pm_name, old_deadline, new_deadline} for the
+    run summary.
     """
     from db.state_store import get_all_active_jobs
     db_map: dict[tuple[str, str], dict] = {
@@ -54,6 +60,7 @@ def _sync_all(sheet_jobs: list) -> dict:
 
     synced = 0
     errors = 0
+    deadline_changes: list[dict] = []
 
     for job in sheet_jobs:
         client_name = job["client_name"]
@@ -62,17 +69,26 @@ def _sync_all(sheet_jobs: list) -> dict:
 
         pm_name = job.get("pm_name", "")
         job_type = job.get("job_type", "").strip()
-        old_deadline = ""
+        old_deadline_raw = ""
 
         existing_db = db_map.get((client_name, job_type))
         if existing_db:
-            old_deadline = (existing_db.get("deadline_to_start") or "").strip()
+            old_deadline_raw = (existing_db.get("deadline_to_start") or "").strip()
 
         # ── Deadline to Start change detection ──────────────────────────────
-        new_deadline = (job.get("deadline_to_start") or "").strip()
-        if old_deadline and new_deadline and old_deadline != new_deadline:
-            send_deadline_change_alert(client_name, pm_name, old_deadline, new_deadline)
-            logger.info(f"Deadline change: {client_name} {old_deadline} → {new_deadline}")
+        new_deadline_raw = (job.get("deadline_to_start") or "").strip()
+        old_deadline_parsed = parse_latest_date(old_deadline_raw) if old_deadline_raw else None
+        new_deadline_parsed = parse_latest_date(new_deadline_raw) if new_deadline_raw else None
+        if old_deadline_parsed and new_deadline_parsed and old_deadline_parsed != new_deadline_parsed:
+            send_deadline_change_alert(client_name, pm_name, old_deadline_raw, new_deadline_raw)
+            logger.info(f"Deadline change: {client_name} {old_deadline_raw} → {new_deadline_raw}")
+            deadline_changes.append({
+                "client_name": client_name,
+                "job_type": job_type,
+                "pm_name": pm_name,
+                "old_deadline": old_deadline_raw,
+                "new_deadline": new_deadline_raw,
+            })
 
         # ── Upsert to DB ─────────────────────────────────────────────────────
         try:
@@ -110,7 +126,7 @@ def _sync_all(sheet_jobs: list) -> dict:
     logger.info(f"OCA sync complete — sheet jobs: {len(sheet_jobs)}, DB upserted: {synced}, errors: {errors}")
     held_jobs = [j for j in db_map.values() if j.get("comms_hold")]
     logger.info(f"Jobs on comms hold (skipped by OCA): {len(held_jobs)}")
-    return {"synced": synced, "errors": errors}
+    return {"synced": synced, "errors": errors, "deadline_changes": deadline_changes}
 
 
 def _checkpoint(run_id: "int | None", line: str) -> None:
