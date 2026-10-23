@@ -83,3 +83,49 @@ def check_missing_pm(sheet_jobs: list, contact_date_map: "dict | None" = None) -
     return flags
 
 
+def classify_pm_issues(sheet_jobs: list, pm_config: "list | None" = None) -> dict[str, Any]:
+    """Classify To Start / In Process jobs (not on comms_hold) by PM assignment problem.
+
+    Reported regardless of start date — unlike check_missing_pm, which only
+    flags jobs starting within 14 days for the oca_flags dedup system. This
+    is a pure function over the current sheet job rows for the daily
+    checklist, so it's a fresh snapshot every run, not sourced from
+    oca_flags. check_missing_pm's own flag code path is untouched.
+
+    "raw_name" is job["pm_name"] as resolved by sheets.py's _row_to_job —
+    i.e. after normalize_pm_name()'s alias mapping, since the sheet's
+    original unmapped cell text isn't carried on the job dict.
+
+    Returns:
+        {
+            "blank": [{"client_name", "job_type"}, ...],
+            "unrecognized": [{"raw_name", "job_count", "clients": [client_name, ...]}, ...],
+        }
+    """
+    pm_config = pm_config if pm_config is not None else _get_pm_config()
+    blank: list[dict[str, Any]] = []
+    unrecognized_by_name: dict[str, list[str]] = {}
+
+    for job in sheet_jobs:
+        if job.get("sheet_tab") not in ("to_start", "in_process"):
+            continue
+        if job.get("comms_hold"):
+            continue
+
+        client_name = job.get("client_name", "")
+        pm_name = (job.get("pm_name") or "").strip()
+
+        if not pm_name:
+            blank.append({"client_name": client_name, "job_type": job.get("job_type", "")})
+            continue
+
+        if not is_valid_pm(pm_name, pm_config):
+            unrecognized_by_name.setdefault(pm_name, []).append(client_name)
+
+    unrecognized = [
+        {"raw_name": name, "job_count": len(clients), "clients": clients}
+        for name, clients in unrecognized_by_name.items()
+    ]
+    return {"blank": blank, "unrecognized": unrecognized}
+
+
