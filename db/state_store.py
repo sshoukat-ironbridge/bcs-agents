@@ -615,31 +615,6 @@ def delete_pm(pm_id: int) -> None:
         logger.error(f"delete_pm({pm_id}): {e}")
 
 
-def seed_pm_config() -> None:
-    if not _db_available:
-        return
-    try:
-        with _Session() as s:
-            if s.query(PmConfig).count() > 0:
-                return
-        import json, pathlib
-        pm_json = pathlib.Path(__file__).parent.parent / "config" / "pm_config.json"
-        if not pm_json.exists():
-            return
-        pms = json.loads(pm_json.read_text())
-        with _Session() as s:
-            for pm in pms:
-                s.add(PmConfig(
-                    name=pm.get("full_name", ""),
-                    email=pm.get("email", ""),
-                    slack_user_id=pm.get("slack_user_id", ""),
-                ))
-            s.commit()
-        logger.info(f"Seeded {len(pms)} PMs into pm_config table")
-    except Exception as e:
-        logger.error(f"seed_pm_config: {e}")
-
-
 # --- Sales rep helpers ---
 
 def get_sales_rep_list() -> list:
@@ -835,22 +810,6 @@ def get_user_by_id(user_id: int) -> "dict | None":
         return None
 
 
-def create_user(email: str, password_hash: str) -> bool:
-    if not _db_available:
-        return False
-    try:
-        with _Session() as s:
-            email = email.strip().lower()
-            if s.query(DashboardUser).filter_by(email=email).first():
-                return False
-            s.add(DashboardUser(email=email, password_hash=password_hash))
-            s.commit()
-            return True
-    except Exception as e:
-        logger.error(f"create_user: {e}")
-        return False
-
-
 def update_user_password(email: str, password_hash: str) -> bool:
     if not _db_available:
         return False
@@ -1041,46 +1000,6 @@ def upsert_active_job(job: dict) -> None:
         logger.error(f"DB error in upsert_active_job ({client_name}): {e}")
 
 
-def get_jobs_due_for_update() -> list[dict]:
-    today = date.today()
-
-    if not _db_available:
-        return [
-            v for v in _memory_jobs.values()
-            if not v.get("escalation_flag")
-            and (v.get("next_scheduled_update") is None or v["next_scheduled_update"] <= today)
-        ]
-
-    try:
-        with _Session() as session:
-            rows = (
-                session.query(CaseyActiveJob)
-                .filter(
-                    CaseyActiveJob.escalation_flag == False,
-                    (CaseyActiveJob.next_scheduled_update == None) |
-                    (CaseyActiveJob.next_scheduled_update <= today),
-                )
-                .all()
-            )
-            return [_row_to_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(f"DB error in get_jobs_due_for_update: {e}")
-        return []
-
-
-def get_escalated_jobs() -> list[dict]:
-    if not _db_available:
-        return [v for v in _memory_jobs.values() if v.get("escalation_flag")]
-
-    try:
-        with _Session() as session:
-            rows = session.query(CaseyActiveJob).filter_by(escalation_flag=True).all()
-            return [_row_to_dict(r) for r in rows]
-    except Exception as e:
-        logger.error(f"DB error in get_escalated_jobs: {e}")
-        return []
-
-
 def get_all_active_jobs() -> list[dict]:
     if not _db_available:
         return [j for j in _memory_jobs.values() if not j.get("retired")]
@@ -1097,27 +1016,6 @@ def get_all_active_jobs() -> list[dict]:
     except Exception as e:
         logger.error(f"DB error in get_all_active_jobs: {e}")
         return []
-
-
-def clear_escalation(client_name: str, pm_name: str) -> None:
-    if not _db_available:
-        key = (client_name, pm_name or "")
-        if key in _memory_jobs:
-            _memory_jobs[key]["escalation_flag"] = False
-            _memory_jobs[key]["escalation_reason"] = None
-        return
-
-    try:
-        with _Session() as session:
-            row = session.query(CaseyActiveJob).filter_by(
-                client_name=client_name, pm_name=pm_name or ""
-            ).first()
-            if row:
-                row.escalation_flag = False
-                row.escalation_reason = None
-                session.commit()
-    except Exception as e:
-        logger.error(f"DB error in clear_escalation ({client_name}): {e}")
 
 
 def get_summary() -> dict[str, int]:
@@ -1251,30 +1149,6 @@ def update_flag_alerted(job_id: str, flag_type: str) -> bool:
 
 
 # Keep old name as alias for backward compatibility with alerts.py stub
-def update_flag(job_id: str, flag_type: str) -> bool:
-    return update_flag_alerted(job_id, flag_type)
-
-
-def resolve_flag(job_id: str, flag_type: str) -> bool:
-    if not _db_available:
-        return False
-    try:
-        with _Session() as session:
-            flag = (
-                session.query(OcaFlag)
-                .filter_by(job_id=job_id, flag_type=flag_type, resolved_at=None)
-                .first()
-            )
-            if not flag:
-                return False
-            flag.resolved_at = datetime.now(timezone.utc)
-            session.commit()
-            return True
-    except Exception as e:
-        logger.error(f"DB error in resolve_flag: {e}")
-        return False
-
-
 def resolve_flags_not_in(active_job_ids: list, flag_type: str) -> None:
     if not _db_available:
         return
@@ -1296,49 +1170,6 @@ def resolve_flags_not_in(active_job_ids: list, flag_type: str) -> None:
             session.commit()
     except Exception as e:
         logger.error(f"DB error in resolve_flags_not_in ({flag_type}): {e}")
-
-
-def get_active_flags_summary() -> dict:
-    summary = {
-        "stale": 0, "missing_pm": 0, "unconfirmed_crew": 0,
-        "dropped_invoice": 0, "readiness_sync": 0,
-    }
-    if not _db_available:
-        return summary
-    try:
-        with _Session() as session:
-            rows = session.query(OcaFlag).filter(OcaFlag.resolved_at == None).all()
-            for row in rows:
-                ft = row.flag_type
-                if ft == "stale_record":
-                    summary["stale"] += 1
-                elif ft in summary:
-                    summary[ft] += 1
-    except Exception as e:
-        logger.error(f"DB error in get_active_flags_summary: {e}")
-    return summary
-
-
-def get_weekly_summary() -> dict:
-    today = date.today()
-    # Monday of this week
-    week_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) - timedelta(days=today.weekday())
-    result = {"raised": 0, "resolved": 0, "active": 0}
-    if not _db_available:
-        return result
-    try:
-        with _Session() as session:
-            all_flags = session.query(OcaFlag).all()
-            for flag in all_flags:
-                if flag.first_flagged_at and flag.first_flagged_at >= week_start:
-                    result["raised"] += 1
-                if flag.resolved_at and flag.resolved_at >= week_start:
-                    result["resolved"] += 1
-                if flag.resolved_at is None:
-                    result["active"] += 1
-    except Exception as e:
-        logger.error(f"DB error in get_weekly_summary: {e}")
-    return result
 
 
 # --- Fix 3: per-customer comms hold ---
@@ -1387,36 +1218,6 @@ def clear_comms_hold(job_id: int) -> bool:
 
 # --- Sheet reconciliation: soft-delete jobs removed from sheet ---
 
-def retire_job(client_name: str, sheet_tab: str, primary_job_type: str) -> bool:
-    """Mark a specific job row as retired (no longer present in sheet)."""
-    now = datetime.now(timezone.utc)
-    if not _db_available:
-        key = (client_name, sheet_tab or "", primary_job_type or "")
-        if key in _memory_jobs and not _memory_jobs[key].get("retired"):
-            _memory_jobs[key]["retired"] = True
-            _memory_jobs[key]["retired_at"] = now
-            logger.info(f"RETIRED {client_name} — no longer present in sheet, removing from active processing")
-            return True
-        return False
-    try:
-        with _Session() as s:
-            row = s.query(CaseyActiveJob).filter_by(
-                client_name=client_name,
-                sheet_tab=sheet_tab or "",
-                primary_job_type=primary_job_type or "",
-            ).first()
-            if row and not row.retired:
-                row.retired = True
-                row.retired_at = now
-                s.commit()
-                logger.info(f"RETIRED {client_name} — no longer present in sheet, removing from active processing")
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"retire_job({client_name}): {e}")
-        return False
-
-
 def reconcile_retired_jobs(sheet_keys: set) -> int:
     """Retire all non-retired active-tab rows whose (client_name, sheet_tab, primary_job_type)
     key is absent from the current sheet fetch. Returns count of newly retired rows."""
@@ -1460,18 +1261,3 @@ def reconcile_retired_jobs(sheet_keys: set) -> int:
 
 # --- Fix 4: duplicate send audit trail ---
 
-def is_first_run_today() -> bool:
-    today = date.today()
-    if not _db_available:
-        return True
-    try:
-        with _Session() as session:
-            existing = session.query(OcaRun).filter_by(run_date=today).first()
-            if existing:
-                return False
-            session.add(OcaRun(run_date=today, created_at=datetime.now(timezone.utc)))
-            session.commit()
-            return True
-    except Exception as e:
-        logger.error(f"DB error in is_first_run_today: {e}")
-        return False
