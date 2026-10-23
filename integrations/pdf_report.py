@@ -18,7 +18,7 @@ _FLAG_TYPE_LABELS = {
     "missing_pm":           "Missing PM",
     "unconfirmed_crew":     "Unconfirmed Crew",
     "dropped_invoice":      "Dropped Invoice",
-    "readiness_sync":       "HubSpot Sync Issue",
+    "readiness_sync":       "Sync Issue",
     "deal_not_found":       "Deal Not Found",
     "approaching_deadline": "Approaching Deadline",
     "escalation":           "Escalation",
@@ -112,9 +112,6 @@ def generate_pdf_report(
             label = _FLAG_TYPE_LABELS.get(flag_type, flag_type.replace("_", " ").title())
 
             details = flag.get("details", "")
-            deal_id = flag.get("hubspot_deal_id")
-            if deal_id:
-                details = f"{details} [HubSpot deal/{deal_id}]"
 
             rows.append([
                 (flag.get("client_name") or "")[:40],

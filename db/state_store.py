@@ -199,9 +199,6 @@ def _row_to_dict(row: "CaseyActiveJob") -> dict:
         "last_pm_contact": row.last_pm_contact,
         "most_recent_contact": row.most_recent_contact,
         "pm_communication_history": row.pm_communication_history,
-        "hubspot_deal_id": row.hubspot_deal_id,
-        "hubspot_contact_id": row.hubspot_contact_id,
-        "hubspot_owner_name": row.hubspot_owner_name,
         "customer_email": row.customer_email,
         "customer_phone": row.customer_phone,
         "last_customer_update_sent": row.last_customer_update_sent,
@@ -386,19 +383,8 @@ def init_db() -> None:
                     conn.rollback()
                     logger.warning(f"patricia_anderson_retired migration: {_e}")
 
-            # Seed default HubSpot field names if not already set
-            _hs_defaults = {
-                "hubspot_field_pm_name":           "pm_name",
-                "hubspot_field_crew_confirmed":    "crew_confirmed",
-                "hubspot_field_last_update_sent":  "last_customer_update_sent",
-                "hubspot_field_next_update":       "next_scheduled_update",
-                "hubspot_field_escalation_flag":   "escalation_flag",
-                "hubspot_field_escalation_reason": "escalation_reason",
-                "hubspot_portal_id":               "51566851",
-                # Fix 2: global email pause — default to paused so emails cannot go
-                # out accidentally on first deploy; admin must explicitly activate.
-                "casey_emails_paused":    "true",
-                "casey_emails_paused_at": "",
+            # Seed default app config if not already set
+            _config_defaults = {
                 # Notification routing — all agent alerts go to this Slack channel
                 "slack_urgentmatters_channel":  "urgentmatters",
                 # Chris notification email — receives pre-send and step-in alerts
@@ -414,11 +400,8 @@ def init_db() -> None:
                 # Dialpad integration
                 "dialpad_api_key":           "",
                 "dialpad_api_base_url":      "https://dialpad.com/api/v2",
-                # HubSpot write protection — default OFF so no writes go out on first deploy
-                "hubspot_writes_enabled":    "false",
-                "hubspot_writes_toggled_at": "",
             }
-            for key, default_val in _hs_defaults.items():
+            for key, default_val in _config_defaults.items():
                 existing = conn.execute(
                     text("SELECT value FROM app_config WHERE key = :k"), {"k": key}
                 ).fetchone()
@@ -885,10 +868,6 @@ def upsert_active_job(job: dict) -> None:
                           "job_description", "estimator_name", "to_collect", "total_project",
                           "sheet_tab", "deadline_to_start", "pm_name"):
                 existing[field] = job.get(field)
-            # hubspot_deal_id / hubspot_contact_id / hubspot_owner_name are no longer
-            # populated by any caller — preserve whatever is already stored.
-            for field in ("hubspot_deal_id", "hubspot_contact_id", "hubspot_owner_name"):
-                existing[field] = job.get(field, existing.get(field))
             if "comms_hold" in job:
                 existing["comms_hold"] = job["comms_hold"]
                 existing["comms_hold_reason"] = job.get("comms_hold_reason")
@@ -927,11 +906,6 @@ def upsert_active_job(job: dict) -> None:
                 row.last_pm_contact = job.get("last_pm_contact")
                 row.most_recent_contact = job.get("most_recent_contact")
                 row.pm_communication_history = job.get("pm_communication_history")
-                # hubspot_deal_id / hubspot_owner_name are no longer populated by
-                # any caller (HubSpot integration removed) — preserve whatever is
-                # already stored rather than nulling it out on every sync.
-                row.hubspot_deal_id = job.get("hubspot_deal_id", row.hubspot_deal_id)
-                row.hubspot_owner_name = job.get("hubspot_owner_name", row.hubspot_owner_name)
                 row.customer_email = job.get("customer_email")
                 row.customer_phone = job.get("customer_phone")
                 row.client_mood = job.get("client_mood")
@@ -954,9 +928,6 @@ def upsert_active_job(job: dict) -> None:
                         row.escalation_flag = False
                         row.escalation_reason = None
                         logger.info(f"Cleared stale escalation for {client_name} — job is on comms_hold")
-                # Only overwrite hubspot_contact_id if provided
-                if job.get("hubspot_contact_id"):
-                    row.hubspot_contact_id = job["hubspot_contact_id"]
                 # Never overwrite scheduling fields if already set
                 if not row.last_customer_update_sent and job.get("last_customer_update_sent"):
                     row.last_customer_update_sent = job["last_customer_update_sent"]
@@ -976,9 +947,6 @@ def upsert_active_job(job: dict) -> None:
                     last_pm_contact=job.get("last_pm_contact"),
                     most_recent_contact=job.get("most_recent_contact"),
                     pm_communication_history=job.get("pm_communication_history"),
-                    hubspot_deal_id=job.get("hubspot_deal_id"),
-                    hubspot_contact_id=job.get("hubspot_contact_id"),
-                    hubspot_owner_name=job.get("hubspot_owner_name"),
                     customer_email=job.get("customer_email"),
                     customer_phone=job.get("customer_phone"),
                     client_mood=job.get("client_mood"),
