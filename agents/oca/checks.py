@@ -3,6 +3,7 @@ from typing import Any
 
 from integrations.sheets import parse_latest_date, is_valid_pm
 from utils.logger import get_logger
+from utils.timeutil import today_ny
 
 logger = get_logger("oca.checks")
 
@@ -39,7 +40,7 @@ def _flag(client_name: str, pm_name: str, flag_type: str, details: str, urgency:
 def check_missing_pm(sheet_jobs: list, contact_date_map: "dict | None" = None) -> list[dict[str, Any]]:
     """Flag jobs with no recognised PM that start within 14 days."""
     contact_date_map = contact_date_map or {}
-    today = date.today()
+    today = today_ny()
     pm_config = _get_pm_config()
     flags = []
     for job in sheet_jobs:

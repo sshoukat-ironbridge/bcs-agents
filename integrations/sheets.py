@@ -114,11 +114,12 @@ def normalize_pm_name(raw_name: str) -> str:
 
 def parse_latest_date(cell_value: str) -> "date | None":
     from datetime import date, datetime
+    from utils.timeutil import today_ny
     if not cell_value or not cell_value.strip():
         return None
 
     FORMATS = ["%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y", "%m/%d", "%m-%d"]
-    current_year = date.today().year
+    current_year = today_ny().year
     best: date | None = None
 
     for raw in cell_value.replace("\r", "\n").split("\n"):
