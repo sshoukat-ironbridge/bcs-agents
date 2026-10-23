@@ -176,50 +176,6 @@ def _silent_mode_html(enabled: bool, toggled_at: str) -> str:
     )
 
 
-def _hs_writes_html(writes_enabled: bool, toggled_at: str) -> str:
-    """Render the HubSpot Write Protection toggle as an HTML fragment for htmx swaps."""
-    if writes_enabled:
-        card_class  = "bg-amber-50 border-2 border-amber-400"
-        badge_class = "bg-amber-500 text-white"
-        badge_text  = "⚠️ HubSpot Writes ENABLED — agents will update HubSpot"
-        btn_text    = "🛡 Enable Write Protection"
-        btn_class   = "bg-emerald-600 hover:bg-emerald-700 text-white"
-        desc        = "Agents will create and update deals, contacts, and notes in HubSpot on each run."
-    else:
-        card_class  = "bg-emerald-50 border-2 border-emerald-300"
-        badge_class = "bg-emerald-600 text-white"
-        badge_text  = "🛡 HubSpot Write Protection ON — no writes going to HubSpot"
-        btn_text    = "⚠️ Enable HubSpot Writes"
-        btn_class   = "bg-amber-500 hover:bg-amber-600 text-white"
-        desc        = "All HubSpot create/update/archive calls are blocked. Reads and searches still work normally."
-
-    timestamp_html = ""
-    if toggled_at:
-        try:
-            dt = datetime.fromisoformat(toggled_at)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            timestamp_html = f'<p class="text-xs text-slate-500 mt-2">Last toggled: {dt.strftime("%b %d, %Y at %H:%M UTC")}</p>'
-        except Exception:
-            pass
-
-    return (
-        f'<div id="hs-writes-controls" class="rounded-2xl p-6 {card_class} mb-4">'
-        f'<div class="flex items-start justify-between gap-4">'
-        f'<div>'
-        f'<span class="inline-flex items-center px-3 py-1.5 rounded-full text-sm font-bold {badge_class}">{badge_text}</span>'
-        f'<p class="text-sm text-slate-600 mt-2">{desc}</p>'
-        f'{timestamp_html}'
-        f'</div>'
-        f'<button hx-post="/api/config/hubspot/toggle-writes" hx-target="#hs-writes-controls" hx-swap="outerHTML"'
-        f' class="shrink-0 px-5 py-2.5 text-sm font-semibold rounded-xl shadow-sm transition-all duration-150 {btn_class}">'
-        f'{btn_text}'
-        f'</button>'
-        f'</div>'
-        f'</div>'
-    )
-
-
 def _email_pause_html(paused: bool, paused_at: str) -> str:
     """Render the Operations Controls card as an HTML fragment for htmx swaps."""
     if paused:
@@ -290,7 +246,6 @@ async def config_page(request: Request):
     pms  = get_pm_list()
     reps = get_sales_rep_list()
     qb_connected = bool(db.get("qb_refresh_token"))
-    hs_connected = bool(db.get("hubspot_access_token"))
 
     emails_paused = (db.get("casey_emails_paused") or "true").strip().lower() == "true"
     emails_paused_html = _email_pause_html(emails_paused, db.get("casey_emails_paused_at") or "")
@@ -298,22 +253,17 @@ async def config_page(request: Request):
     silent_enabled = (db.get("silent_mode") or "true").strip().lower() == "true"
     silent_mode_html = _silent_mode_html(silent_enabled, db.get("silent_mode_toggled_at") or "")
 
-    hs_writes_enabled = (db.get("hubspot_writes_enabled") or "false").strip().lower() == "true"
-    hs_writes_html = _hs_writes_html(hs_writes_enabled, db.get("hubspot_writes_toggled_at") or "")
-
     return templates.TemplateResponse(request, "config.html", {
         "page": "config",
         "title": "Configurations",
         "pms": pms,
         "sales_reps": reps,
         "qb_connected": qb_connected,
-        "hs_connected": hs_connected,
         "qb_redirect_uri": str(request.url_for("quickbooks_oauth_callback")),
         "google_sa_email": _google_service_account_email(),
         "cfg": db,
         "emails_paused_html": emails_paused_html,
         "silent_mode_html": silent_mode_html,
-        "hs_writes_html": hs_writes_html,
     })
 
 
@@ -442,18 +392,6 @@ async def quickbooks_oauth_callback(
     return HTMLResponse(_qb_oauth_page("Could not connect to QuickBooks — please double check your Client ID/Secret and try again.", success=False))
 
 
-@router.post("/api/config/hubspot", response_class=HTMLResponse)
-async def save_hubspot(
-    access_token: Optional[str] = Form(None),
-    pipeline_id:  Optional[str] = Form(None),
-    portal_id:    Optional[str] = Form(None),
-):
-    if access_token: set_config("hubspot_access_token", access_token)
-    if pipeline_id:  set_config("hubspot_pipeline_id",  pipeline_id)
-    if portal_id:    set_config("hubspot_portal_id",    portal_id)
-    return HTMLResponse(_toast("HubSpot settings saved"))
-
-
 @router.post("/api/config/slack", response_class=HTMLResponse)
 async def save_slack(
     bot_token:              Optional[str] = Form(None),
@@ -480,48 +418,6 @@ async def save_slack(
 async def save_sheets(sheets_id: Optional[str] = Form(None)):
     if sheets_id: set_config("google_sheets_id", sheets_id)
     return HTMLResponse(_toast("Google Sheets ID saved"))
-
-
-@router.post("/api/config/hubspot/fields", response_class=HTMLResponse)
-async def save_hubspot_fields(
-    hubspot_field_pm_name:           Optional[str] = Form(None),
-    hubspot_field_crew_confirmed:    Optional[str] = Form(None),
-    hubspot_field_last_update_sent:  Optional[str] = Form(None),
-    hubspot_field_next_update:       Optional[str] = Form(None),
-    hubspot_field_escalation_flag:   Optional[str] = Form(None),
-    hubspot_field_escalation_reason: Optional[str] = Form(None),
-):
-    fields = {
-        "hubspot_field_pm_name":           hubspot_field_pm_name,
-        "hubspot_field_crew_confirmed":    hubspot_field_crew_confirmed,
-        "hubspot_field_last_update_sent":  hubspot_field_last_update_sent,
-        "hubspot_field_next_update":       hubspot_field_next_update,
-        "hubspot_field_escalation_flag":   hubspot_field_escalation_flag,
-        "hubspot_field_escalation_reason": hubspot_field_escalation_reason,
-    }
-    for key, val in fields.items():
-        if val is not None:
-            set_config(key, val.strip())
-    return HTMLResponse(_toast("HubSpot custom field names saved"))
-
-
-@router.post("/api/config/hubspot/toggle-writes", response_class=HTMLResponse)
-async def toggle_hubspot_writes():
-    current = (get_config("hubspot_writes_enabled") or "false").strip().lower()
-    new_state = "false" if current == "true" else "true"
-    now_iso = datetime.now(timezone.utc).isoformat()
-    set_config("hubspot_writes_enabled", new_state)
-    set_config("hubspot_writes_toggled_at", now_iso)
-    return HTMLResponse(_hs_writes_html(new_state == "true", now_iso))
-
-
-@router.post("/api/config/hubspot/test", response_class=HTMLResponse)
-async def test_hubspot():
-    from db.state_store import get_config
-    token = get_config("hubspot_access_token")
-    if token:
-        return HTMLResponse(_toast("Connected to HubSpot", success=True))
-    return HTMLResponse(_toast("No access token configured", success=False))
 
 
 # ── Dialpad config ─────────────────────────────────────────────────────────────

@@ -123,7 +123,7 @@
           </svg>
         </button>
         <div id="config-sub" class="{% if page != 'config' %}hidden{% endif %} mt-1 space-y-0.5">
-          {% for item in [('QuickBooks', '#quickbooks'), ('PM List', '#pm-list'), ('Sales Rep List', '#sales-reps'), ('Google Sheets', '#google-sheets'), ('HubSpot Config', '#hubspot'), ('HS Custom Fields', '#hubspot-fields'), ('Slack Bot Token', '#slack')] %}
+          {% for item in [('QuickBooks', '#quickbooks'), ('PM List', '#pm-list'), ('Sales Rep List', '#sales-reps'), ('Google Sheets', '#google-sheets'), ('Slack Bot Token', '#slack')] %}
           <a href="/config{{ item[1] }}"
             class="flex items-center gap-3 pl-10 pr-3 py-2 rounded-xl text-sm text-slate-400 hover:bg-slate-800/50 hover:text-white transition-all duration-150 border-l-2 border-transparent">
             {{ item[0] }}

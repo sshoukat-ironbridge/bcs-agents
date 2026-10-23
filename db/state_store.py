@@ -922,11 +922,14 @@ def upsert_active_job(job: dict) -> None:
             for field in ("job_type", "start_date", "deposit_date", "estimated_start_window",
                           "assigned_crew_sub", "last_pm_contact", "most_recent_contact",
                           "pm_communication_history",
-                          "hubspot_deal_id", "hubspot_contact_id", "hubspot_owner_name",
                           "customer_email", "customer_phone", "client_mood", "complaint_note",
                           "job_description", "estimator_name", "to_collect", "total_project",
                           "sheet_tab", "deadline_to_start", "pm_name"):
                 existing[field] = job.get(field)
+            # hubspot_deal_id / hubspot_contact_id / hubspot_owner_name are no longer
+            # populated by any caller — preserve whatever is already stored.
+            for field in ("hubspot_deal_id", "hubspot_contact_id", "hubspot_owner_name"):
+                existing[field] = job.get(field, existing.get(field))
             if "comms_hold" in job:
                 existing["comms_hold"] = job["comms_hold"]
                 existing["comms_hold_reason"] = job.get("comms_hold_reason")
@@ -965,8 +968,11 @@ def upsert_active_job(job: dict) -> None:
                 row.last_pm_contact = job.get("last_pm_contact")
                 row.most_recent_contact = job.get("most_recent_contact")
                 row.pm_communication_history = job.get("pm_communication_history")
-                row.hubspot_deal_id = job.get("hubspot_deal_id")
-                row.hubspot_owner_name = job.get("hubspot_owner_name")
+                # hubspot_deal_id / hubspot_owner_name are no longer populated by
+                # any caller (HubSpot integration removed) — preserve whatever is
+                # already stored rather than nulling it out on every sync.
+                row.hubspot_deal_id = job.get("hubspot_deal_id", row.hubspot_deal_id)
+                row.hubspot_owner_name = job.get("hubspot_owner_name", row.hubspot_owner_name)
                 row.customer_email = job.get("customer_email")
                 row.customer_phone = job.get("customer_phone")
                 row.client_mood = job.get("client_mood")
@@ -1091,42 +1097,6 @@ def get_all_active_jobs() -> list[dict]:
     except Exception as e:
         logger.error(f"DB error in get_all_active_jobs: {e}")
         return []
-
-
-def set_hubspot_deal_id(client_name: str, pm_name: str, deal_id: str) -> None:
-    if not _db_available:
-        key = (client_name, pm_name or "")
-        if key in _memory_jobs:
-            _memory_jobs[key]["hubspot_deal_id"] = deal_id
-        return
-    try:
-        with _Session() as session:
-            row = session.query(CaseyActiveJob).filter_by(
-                client_name=client_name, pm_name=pm_name or ""
-            ).first()
-            if row:
-                row.hubspot_deal_id = deal_id
-                session.commit()
-    except Exception as e:
-        logger.error(f"DB error in set_hubspot_deal_id ({client_name}): {e}")
-
-
-def set_hubspot_contact_id(client_name: str, pm_name: str, contact_id: str) -> None:
-    if not _db_available:
-        key = (client_name, pm_name or "")
-        if key in _memory_jobs:
-            _memory_jobs[key]["hubspot_contact_id"] = contact_id
-        return
-    try:
-        with _Session() as session:
-            row = session.query(CaseyActiveJob).filter_by(
-                client_name=client_name, pm_name=pm_name or ""
-            ).first()
-            if row:
-                row.hubspot_contact_id = contact_id
-                session.commit()
-    except Exception as e:
-        logger.error(f"DB error in set_hubspot_contact_id ({client_name}): {e}")
 
 
 def set_update_sent(client_name: str, pm_name: str) -> None:

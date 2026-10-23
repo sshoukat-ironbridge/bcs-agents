@@ -21,8 +21,6 @@ _FLAG_TYPE_LABELS = {
     "missing_pm":           "Missing PM Assignment",
     "unconfirmed_crew":     "Unconfirmed Crew/Sub",
     "dropped_invoice":      "Dropped Invoice Follow-up",
-    "readiness_sync":       "HubSpot Sync Issue",
-    "deal_not_found":       "Deal Not Found in HubSpot",
     "approaching_deadline": "Approaching 7-Day Deadline",
 }
 
@@ -174,16 +172,13 @@ def build_deadline_change_message(
     pm_name: str,
     old_deadline: str,
     new_deadline: str,
-    deal_id: "str | None",
 ) -> str:
-    deal_url = _hubspot_deal_url(deal_id) if deal_id else "—"
     return (
         f"📅 *Deadline to Start Changed*\n"
         f"Customer: {client_name}\n"
         f"PM: {pm_name or 'Unassigned'}\n"
         f"Previous deadline: {old_deadline}\n"
-        f"New deadline: {new_deadline}\n"
-        f"HubSpot: {deal_url}"
+        f"New deadline: {new_deadline}"
     )
 
 
@@ -192,9 +187,8 @@ def send_deadline_change_alert(
     pm_name: str,
     old_deadline: str,
     new_deadline: str,
-    deal_id: "str | None",
 ) -> None:
-    _route(build_deadline_change_message(client_name, pm_name, old_deadline, new_deadline, deal_id))
+    _route(build_deadline_change_message(client_name, pm_name, old_deadline, new_deadline))
 
 
 def _generate_cadence_pdf(flagged_jobs: list[dict[str, Any]], today_str: str) -> bytes:

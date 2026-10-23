@@ -75,8 +75,6 @@ def _get_jobs_from_db(to_start: bool) -> list[dict]:
                 "assigned_crew_sub": r.assigned_crew_sub or "",
                 "last_pm_contact": str(r.last_pm_contact) if r.last_pm_contact else "—",
                 "most_recent_contact": r.most_recent_contact or "",
-                "hubspot_deal_id": r.hubspot_deal_id or "",
-                "hubspot_owner_name": r.hubspot_owner_name or "",
                 "customer_email": r.customer_email or "",
                 "escalation_flag": r.escalation_flag,
                 "escalation_reason": r.escalation_reason or "",

@@ -8,10 +8,8 @@ from agents.oca.checks import (
     check_missing_pm,
     check_unconfirmed_crew,
     check_dropped_invoices,
-    check_job_readiness,
     check_approaching_deadline,
     check_daily_cadence,
-    _flag,
 )
 from agents.oca.alerts import (
     send_deadline_change_alert,
@@ -29,9 +27,6 @@ from db.state_store import (
     resolve_flags_not_in,
     upsert_active_job,
     set_config,
-    get_config,
-    set_hubspot_deal_id,
-    set_hubspot_contact_id,
     get_email_history,
     upsert_email_history,
     should_fetch_email_history,
@@ -44,15 +39,6 @@ from db.state_store import (
 from integrations.slack import send_message
 from integrations.sheets import get_active_jobs, parse_latest_date
 from integrations.gmail import get_pm_customer_email_history
-from integrations.hubspot import (
-    get_open_deals,
-    hs_available,
-    find_deal_for_job,
-    search_contact_by_email,
-    search_contact_by_name,
-    associate_contact_to_deal,
-    update_deal_properties,
-)
 from utils.logger import get_logger
 from config.loader import cfg
 
@@ -64,62 +50,26 @@ _ALL_FLAG_TYPES = [
     "missing_pm",
     "unconfirmed_crew",
     "dropped_invoice",
-    "readiness_sync",
-    "deal_not_found",
     "approaching_deadline",
 ]
 
 
-def _get_hs_custom_field_map() -> dict:
-    """Returns {job_dict_key: hs_property_internal_name} for the two fields OCA writes to HubSpot deals."""
-    keys = [
-        ("pm_name",       "hubspot_field_pm_name"),
-        ("assigned_crew_sub", "hubspot_field_crew_confirmed"),
-    ]
-    result = {}
-    for field_key, config_key in keys:
-        hs_name = get_config(config_key)
-        if hs_name and hs_name.strip():
-            result[field_key] = hs_name.strip()
-    return result
-
-
-def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
+def _sync_all(sheet_jobs: list) -> dict:
     """
-    OCA sync: keep Google Sheet, HubSpot, and local DB aligned.
+    OCA sync: keep Google Sheet and local DB aligned.
 
-    A single customer can have multiple deals — one per job type — so deal
-    resolution is keyed by (client_name, job_type), not client_name alone.
+    Also detects Deadline to Start changes (comparing the DB's previously
+    stored value to the sheet's current value) and alerts on them.
 
-    Deal resolution order per job (stops at first hit), via find_deal_for_job():
-      Layer 1 — DB: casey_active_jobs already has a hubspot_deal_id for this
-                (client_name, job_type).
-      Layer 2 — Contact match: find the customer's HubSpot contact (by email,
-                then phone) and match one of their deals by job_type.
-      Layer 3 — Deal-name search: search deals by client_name, filtered by
-                job_type.
-
-    OCA never creates HubSpot deals. If no deal is found after all layers, a
-    deal_not_found flag is queued (returned to the caller) so Josh gets a
-    condensed DM via the normal flag dedup/cooldown path.
-
-    Returns a summary dict of HubSpot sync counters for the daily digest.
+    Returns a summary dict of sync counters for the daily digest.
     """
-    # Pre-load all DB jobs for Layer 1 lookup, keyed by (client_name, job_type) —
-    # a customer can have multiple deals for different job types.
     from db.state_store import get_all_active_jobs
     db_map: dict[tuple[str, str], dict] = {
         (j["client_name"], j.get("job_type") or ""): j for j in get_all_active_jobs()
     }
 
-    custom_field_map = _get_hs_custom_field_map()
-
     synced = 0
-    matched_by_contact = 0
-    matched_by_name = 0
-    not_found = 0
     errors = 0
-    deal_not_found_flags: list[dict] = []
 
     for job in sheet_jobs:
         client_name = job["client_name"]
@@ -128,93 +78,16 @@ def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
 
         pm_name = job.get("pm_name", "")
         job_type = job.get("job_type", "").strip()
-
-        hubspot_deal_id: "str | None" = None
-        hubspot_owner_name: str = ""
-        hubspot_contact_id: "str | None" = None
-        contact_needs_association = False
         old_deadline = ""
 
-        # ── Deal Layer 1: DB check, keyed by (client_name, job_type) ─────────
         existing_db = db_map.get((client_name, job_type))
         if existing_db:
-            hubspot_owner_name = existing_db.get("hubspot_owner_name") or ""
-            if existing_db.get("hubspot_contact_id"):
-                hubspot_contact_id = existing_db["hubspot_contact_id"]
-            if existing_db.get("hubspot_deal_id"):
-                hubspot_deal_id = existing_db["hubspot_deal_id"]
-                logger.info(f"Using existing deal from DB for {client_name} / {job_type}: {hubspot_deal_id}")
             old_deadline = (existing_db.get("deadline_to_start") or "").strip()
-
-        # ── Deal Layers 2-3: contact+job_type match, deal-name+job_type match ──
-        if not hubspot_deal_id and hs_available():
-            email = job.get("email", "").strip()
-            phone = job.get("customer_phone", "").strip()
-            found_id, layer = find_deal_for_job(client_name, job_type, email, phone, None)
-
-            if found_id:
-                hubspot_deal_id = found_id
-                set_hubspot_deal_id(client_name, pm_name, hubspot_deal_id)
-                contact_needs_association = True
-                if layer == "contact":
-                    matched_by_contact += 1
-                elif layer == "name":
-                    matched_by_name += 1
-            else:
-                not_found += 1
-                logger.warning(f"OCA: no deal found for {client_name} — skipping HubSpot write")
-                flag = _flag(
-                    client_name, pm_name, "deal_not_found",
-                    "Job exists in sheet but no HubSpot deal found. Check that customer "
-                    "email in sheet matches HubSpot contact email.",
-                    "warning",
-                )
-                flag["customer_email"] = email
-                deal_not_found_flags.append(flag)
-
-        # ── Contact search (read-only — OCA never creates contacts) ──────────
-        if not hubspot_contact_id and hs_available():
-            email = job.get("email", "").strip()
-            parts = client_name.strip().split(None, 1)
-            first = parts[0] if parts else client_name
-            last = parts[1] if len(parts) > 1 else ""
-
-            found_cid = None
-            if email:
-                found_cid = search_contact_by_email(email)
-            if not found_cid:
-                found_cid = search_contact_by_name(first, last)
-
-            if found_cid:
-                hubspot_contact_id = found_cid
-                logger.info(f"Found existing HubSpot contact for {client_name}: {hubspot_contact_id}")
-                set_hubspot_contact_id(client_name, pm_name, hubspot_contact_id)
-                contact_needs_association = True
-
-        # ── Associate contact ↔ deal whenever either side was newly resolved ─
-        if hubspot_contact_id and hubspot_deal_id and contact_needs_association:
-            associate_contact_to_deal(hubspot_contact_id, hubspot_deal_id)
-
-        # ── Write pm_name (text) + crew_confirmed (boolean) to deal ─────────
-        if hubspot_deal_id and hs_available() and custom_field_map:
-            props = {}
-            pm_prop = custom_field_map.get("pm_name")
-            if pm_prop:
-                pm_val = (job.get("pm_name") or "").strip()
-                if pm_val:
-                    props[pm_prop] = pm_val
-            crew_prop = custom_field_map.get("assigned_crew_sub")
-            if crew_prop:
-                props[crew_prop] = "true" if (job.get("assigned_crew_sub") or "").strip() else "false"
-            if props:
-                update_deal_properties(hubspot_deal_id, props)
 
         # ── Deadline to Start change detection ──────────────────────────────
         new_deadline = (job.get("deadline_to_start") or "").strip()
         if old_deadline and new_deadline and old_deadline != new_deadline:
-            send_deadline_change_alert(
-                client_name, pm_name, old_deadline, new_deadline, hubspot_deal_id,
-            )
+            send_deadline_change_alert(client_name, pm_name, old_deadline, new_deadline)
             logger.info(f"Deadline change: {client_name} {old_deadline} → {new_deadline}")
 
         # ── Upsert to DB ─────────────────────────────────────────────────────
@@ -230,9 +103,6 @@ def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
                 "last_pm_contact":        job.get("last_pm_contact"),
                 "most_recent_contact":    job.get("sheet_last_contact", ""),
                 "pm_communication_history": job.get("pm_communication_history", ""),
-                "hubspot_deal_id":        hubspot_deal_id,
-                "hubspot_contact_id":     hubspot_contact_id,
-                "hubspot_owner_name":     hubspot_owner_name,
                 "customer_email":         job.get("email", ""),
                 "customer_phone":         job.get("customer_phone", ""),
                 "client_mood":            job.get("client_mood", ""),
@@ -253,19 +123,10 @@ def _sync_all(sheet_jobs: list, hs_deals: list) -> dict:
             errors += 1
 
     set_config("last_sync_at", datetime.utcnow().isoformat())
-    logger.info(
-        f"OCA sync complete — sheet jobs: {len(sheet_jobs)}, "
-        f"DB upserted: {synced}, matched by contact: {matched_by_contact}, "
-        f"matched by deal name: {matched_by_name}, not found: {not_found}, errors: {errors}"
-    )
+    logger.info(f"OCA sync complete — sheet jobs: {len(sheet_jobs)}, DB upserted: {synced}, errors: {errors}")
     held_jobs = [j for j in db_map.values() if j.get("comms_hold")]
     logger.info(f"Jobs on comms hold (skipped by OCA): {len(held_jobs)}")
-    return {
-        "matched_contact": matched_by_contact,
-        "matched_name": matched_by_name,
-        "not_found": not_found,
-        "deal_not_found_flags": deal_not_found_flags,
-    }
+    return {"synced": synced, "errors": errors}
 
 
 def _fetch_email_histories(sheet_jobs: list, pm_config: list) -> None:
@@ -441,9 +302,6 @@ def _run(run_id: "int | None" = None) -> str:
     if not cfg("google_sheets_id"):
         logger.error("OCA: google_sheets_id not configured in DB — aborting")
         return "Aborted: google_sheets_id not configured"
-    if not cfg("hubspot_access_token"):
-        logger.error("OCA: hubspot_access_token not configured in DB — aborting")
-        return "Aborted: hubspot_access_token not configured"
 
     logger.info("OCA starting run")
     init_db()
@@ -458,18 +316,12 @@ def _run(run_id: "int | None" = None) -> str:
         logger.error("OCA: No sheet jobs loaded — aborting")
         return "Aborted: no sheet jobs loaded"
 
-    hs_deals = get_open_deals()
-    logger.info(f"OCA loaded {len(sheet_jobs)} sheet jobs, {len(hs_deals)} HubSpot deals")
-    _checkpoint(run_id, f"OCA loaded {len(sheet_jobs)} sheet jobs, {len(hs_deals)} HubSpot deals")
+    logger.info(f"OCA loaded {len(sheet_jobs)} sheet jobs")
+    _checkpoint(run_id, f"OCA loaded {len(sheet_jobs)} sheet jobs")
 
-    # ── Step 2: Sync — keep Sheet, HubSpot, and local DB aligned ────────────
-    hs_sync_summary = _sync_all(sheet_jobs, hs_deals)
-    _checkpoint(
-        run_id,
-        f"HubSpot sync: matched by contact {hs_sync_summary.get('matched_contact', 0)}, "
-        f"matched by name {hs_sync_summary.get('matched_name', 0)}, "
-        f"not found {hs_sync_summary.get('not_found', 0)}",
-    )
+    # ── Step 2: Sync — keep Sheet and local DB aligned ──────────────────────
+    sync_summary = _sync_all(sheet_jobs)
+    _checkpoint(run_id, f"Sync: {sync_summary.get('synced', 0)} jobs upserted, {sync_summary.get('errors', 0)} errors")
 
     # ── Step 2b: Reconciliation — retire jobs no longer present in sheet ────
     sheet_keys = {
@@ -486,12 +338,6 @@ def _run(run_id: "int | None" = None) -> str:
     _fetch_dialpad_histories(sheet_jobs)
     contact_date_map = _build_contact_date_map(sheet_jobs)
 
-    # Re-fetch open deals — check_job_readiness() needs the up-to-date list.
-    hs_deals = get_open_deals()
-
-    # Build a lookup of deal_id/contact_id for each client_name. _sync_all() writes
-    # these synchronously, so this reflects deals linked this run even if
-    # HubSpot's search index (hs_deals above) hasn't caught up yet.
     from db.state_store import get_all_active_jobs
     db_jobs = {j["client_name"]: j for j in get_all_active_jobs()}
 
@@ -511,15 +357,12 @@ def _run(run_id: "int | None" = None) -> str:
     missing_pm_flags     = check_missing_pm(sheet_jobs, contact_date_map)
     crew_flags           = check_unconfirmed_crew(sheet_jobs, contact_date_map)
     invoice_flags        = check_dropped_invoices(sheet_jobs, contact_date_map)
-    readiness_flags      = check_job_readiness(sheet_jobs, hs_deals, db_jobs, contact_date_map)
-    deal_not_found_flags = hs_sync_summary.get("deal_not_found_flags", [])
     approaching_jobs     = check_approaching_deadline(sheet_jobs, contact_date_map)
 
     _checkpoint(
         run_id,
         f"Checks: stale_record={len(stale_flags)}, missing_pm={len(missing_pm_flags)}, "
         f"unconfirmed_crew={len(crew_flags)}, dropped_invoice={len(invoice_flags)}, "
-        f"readiness_sync={len(readiness_flags)}, deal_not_found={len(deal_not_found_flags)}, "
         f"approaching_deadline={len(approaching_jobs)}",
     )
 
@@ -528,8 +371,6 @@ def _run(run_id: "int | None" = None) -> str:
     all_flags.extend(missing_pm_flags)
     all_flags.extend(crew_flags)
     all_flags.extend(invoice_flags)
-    all_flags.extend(readiness_flags)
-    all_flags.extend(deal_not_found_flags)
 
     logger.info(f"OCA detected {len(all_flags)} flags total")
     _checkpoint(run_id, f"OCA detected {len(all_flags)} flags total")

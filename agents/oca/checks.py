@@ -233,54 +233,6 @@ def check_dropped_invoices(sheet_jobs: list, contact_date_map: "dict | None" = N
     return flags
 
 
-def check_job_readiness(
-    sheet_jobs: list,
-    hs_deals: list,
-    db_jobs: "dict | None" = None,
-    contact_date_map: "dict | None" = None,
-) -> list[dict[str, Any]]:
-    """Flag sheet jobs that have no matching HubSpot deal (data sync issue)."""
-    db_jobs = db_jobs or {}
-    contact_date_map = contact_date_map or {}
-    hs_names = [
-        d.get("properties", {}).get("dealname", "").lower()
-        for d in hs_deals
-    ]
-    flags = []
-    for job in sheet_jobs:
-        if job.get("comms_hold"):
-            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
-            continue
-        client_name = job["client_name"]
-        pm_name = job.get("pm_name", "")
-        client_lower = client_name.lower()
-
-        # _sync_all() writes hubspot_deal_id to the DB synchronously as soon as a
-        # deal is found/created — trust that even if HubSpot's search index (used
-        # to build hs_deals) hasn't caught up to a deal created this same run.
-        if db_jobs.get(client_name, {}).get("hubspot_deal_id"):
-            continue
-
-        matched = any(
-            client_lower in dn or dn in client_lower
-            for dn in hs_names
-            if dn
-        )
-        if matched:
-            continue
-
-        last_contact = contact_date_map.get(client_name)
-        flags.append(_flag(
-            client_name, pm_name,
-            "readiness_sync",
-            f"Job in sheet but no HubSpot deal found for '{client_name}'",
-            "info",
-            last_contact_date=str(last_contact) if last_contact else "",
-        ))
-    logger.info(f"check_job_readiness: {len(flags)} flags")
-    return flags
-
-
 def check_daily_cadence(sheet_jobs: list, contact_date_map: "dict | None" = None) -> list[dict[str, Any]]:
     """Flag In Process jobs where last PM contact is >= 2 days ago, or where no contact date exists.
 

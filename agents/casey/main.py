@@ -1,13 +1,8 @@
 import os
 import sys
-from datetime import datetime, date, timezone, timedelta
+from datetime import datetime, date, timezone
 from dotenv import load_dotenv
 from integrations.sheets import get_active_jobs, parse_latest_date
-from integrations.hubspot import (
-    hs_available,
-    update_deal_properties,
-    create_note_on_deal,
-)
 from integrations.gmail import send_email
 from integrations.slack import send_message
 from integrations.quickbooks import get_invoice_status_for_customer
@@ -190,68 +185,13 @@ def calculate_days_since(date_value) -> "int | None":
 
 
 def build_escalation_slack_msg(job: dict, reason: str, last_contact: "date | None" = None) -> str:
-    deal_id = job.get("hubspot_deal_id")
-    portal_id = cfg("hubspot_portal_id") or "51566851"
-    deal_url = f"https://app.hubspot.com/contacts/{portal_id}/deal/{deal_id}" if deal_id else "—"
     return (
         f"⚠️ *Escalation Required*\n"
         f"Customer: {job['client_name']}\n"
         f"PM: {job.get('pm_name') or 'Unknown'}\n"
         f"Reason: {reason}\n"
-        f"Last contact: {last_contact or 'Unknown'}\n"
-        f"HubSpot: {deal_url}"
+        f"Last contact: {last_contact or 'Unknown'}"
     )
-
-
-def _hs_field(config_key: str, fallback: str) -> str:
-    """Get configured HubSpot property name, or fall back to the default."""
-    val = get_config(config_key)
-    return val.strip() if val and val.strip() else fallback
-
-
-def _write_email_to_hubspot(job: dict, scenario: str, subject: str, next_update_date: "date | None" = None) -> None:
-    """Write email send event back to HubSpot deal as a note + update scheduling fields."""
-    if not hs_available():
-        return
-    deal_id = job.get("hubspot_deal_id")
-    if not deal_id:
-        return
-    note_body = (
-        f"Casey Email Sent [{scenario.upper()}]\n"
-        f"To: {job.get('customer_email', '')}\n"
-        f"Subject: {subject}\n"
-        f"PM: {job.get('pm_name', '')}\n"
-        f"Date: {date.today().isoformat()}"
-    )
-    create_note_on_deal(deal_id, note_body)
-
-    props: dict = {
-        _hs_field("hubspot_field_last_update_sent", "last_customer_update_sent"): date.today().isoformat(),
-    }
-    if next_update_date:
-        props[_hs_field("hubspot_field_next_update", "next_scheduled_update")] = next_update_date.isoformat()
-    update_deal_properties(deal_id, props)
-
-
-def _write_escalation_to_hubspot(job: dict, reason: str) -> None:
-    """Write escalation event to HubSpot deal."""
-    if not hs_available():
-        return
-    deal_id = job.get("hubspot_deal_id")
-    if not deal_id:
-        return
-    note_body = (
-        f"Casey Escalation Triggered\n"
-        f"Reason: {reason}\n"
-        f"PM: {job.get('pm_name', '')}\n"
-        f"Date: {date.today().isoformat()}"
-    )
-    create_note_on_deal(deal_id, note_body)
-    update_deal_properties(deal_id, {
-        "hs_priority": "high",
-        _hs_field("hubspot_field_escalation_flag",   "escalation_flag"):   "true",
-        _hs_field("hubspot_field_escalation_reason", "escalation_reason"): reason,
-    })
 
 
 def _notify_casey_stepped_in(job: dict, pm_name: str, days_since_contact: int) -> None:
@@ -365,34 +305,13 @@ def _run(run_id: "int | None" = None) -> str:
     logger.info(f"Sheet: {len(sheet_jobs)} active jobs loaded")
     _checkpoint(run_id, f"Sheet: {len(sheet_jobs)} active jobs loaded")
 
-    try:
-        from integrations.hubspot import get_all_owners, search_deals_by_client_name, get_contact_email_for_deal
-        owners = get_all_owners() if not MOCK_MODE else {}
-    except Exception:
-        owners = {}
-
     synced = 0
     for job in sheet_jobs:
         client_name = job["client_name"]
         if not client_name.strip():
             continue
 
-        hubspot_deal_id = None
-        hubspot_owner_name = None
         customer_email = job.get("email", "").strip()
-
-        if not MOCK_MODE and hs_available():
-            try:
-                hs_deals = search_deals_by_client_name(client_name)
-                if hs_deals:
-                    hs_deal = hs_deals[0]
-                    hubspot_deal_id = hs_deal["id"]
-                    owner_id = hs_deal["properties"].get("hubspot_owner_id")
-                    hubspot_owner_name = owners.get(str(owner_id), owner_id) if owner_id else None
-                    if not customer_email:
-                        customer_email = get_contact_email_for_deal(hubspot_deal_id) or ""
-            except Exception as e:
-                logger.warning(f"Casey HubSpot lookup failed for {client_name}: {e}")
 
         upsert_active_job({
             "client_name":            client_name,
@@ -406,8 +325,6 @@ def _run(run_id: "int | None" = None) -> str:
             "last_pm_contact":        job.get("last_pm_contact"),
             "most_recent_contact":    job.get("sheet_last_contact", ""),
             "pm_communication_history": job.get("pm_communication_history", ""),
-            "hubspot_deal_id":        hubspot_deal_id,
-            "hubspot_owner_name":     hubspot_owner_name,
             "customer_email":         customer_email,
             "customer_phone":         job.get("customer_phone", ""),
             "client_mood":            job.get("client_mood", ""),
@@ -423,7 +340,7 @@ def _run(run_id: "int | None" = None) -> str:
         synced += 1
 
     logger.info(f"Synced {synced} jobs to database")
-    _checkpoint(run_id, f"HubSpot sync: {synced} jobs synced to database")
+    _checkpoint(run_id, f"Sync: {synced} jobs synced to database")
 
     # ── Reconciliation: retire jobs no longer present in sheet ───────────────
     sheet_keys = {
@@ -514,7 +431,6 @@ def _run(run_id: "int | None" = None) -> str:
             else:
                 set_escalation(client_name, pm_name, escalation_reason)
                 record_alert_sent(job_id, "escalation", client_name)
-                _write_escalation_to_hubspot(job, escalation_reason)
                 escalation_flags.append({
                     "client_name":       client_name,
                     "pm_name":           pm_name,
@@ -611,11 +527,9 @@ def _run(run_id: "int | None" = None) -> str:
         is_backstop = days_since_contact is not None and days_since_contact > 7
 
         if sent:
-            next_update = date.today() + timedelta(days=7)
             set_update_sent(client_name, pm_name)
             record_alert_sent(job_id, "update_due", client_name)
             save_email_thread_ids(client_name, pm_name, returned_thread_id, returned_message_id, subject)
-            _write_email_to_hubspot(job, scenario, subject, next_update_date=next_update)
             logger.info(f"EMAIL SENT [{scenario}] {job_id} → {customer_email} (cc={cc_email})")
             _checkpoint(run_id, f"EMAIL SENT [{scenario}] {job_id} → {customer_email} (cc={cc_email})")
             emails_sent += 1
