@@ -48,25 +48,73 @@ _ALL_FLAG_TYPES = [
 ]
 
 
+def _sheet_sync_key(job: dict) -> tuple:
+    """The same (client_name, sheet_tab, primary_job_type) triple
+    upsert_active_job() matches DB rows by."""
+    return (job["client_name"], job.get("sheet_tab") or "", job.get("primary_job_type") or "")
+
+
+def collapse_duplicate_sheet_rows(sheet_jobs: list) -> "tuple[list, list]":
+    """Collapse sheet_jobs to one row per (client_name, sheet_tab,
+    primary_job_type) key — last row wins, matching upsert_active_job()'s
+    own behaviour (it's keyed the same way, so the last-processed row for
+    a given key always won in the DB anyway). Doing this explicitly,
+    BEFORE deadline-change comparison, means a duplicate pair can never
+    produce a spurious "changed" alert: only ever one row per key is
+    compared against the previous run's stored value.
+
+    Returns (collapsed_jobs, duplicate_groups) where duplicate_groups is
+    a list of {"key": (client_name, sheet_tab, primary_job_type), "rows":
+    [job, ...]} for every key that had more than one row this run, so the
+    caller can log a warning naming what differed between them.
+    """
+    by_key: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for job in sheet_jobs:
+        key = _sheet_sync_key(job)
+        if key not in by_key:
+            order.append(key)
+            by_key[key] = []
+        by_key[key].append(job)
+
+    collapsed = [by_key[key][-1] for key in order]
+    duplicate_groups = [{"key": key, "rows": rows} for key, rows in by_key.items() if len(rows) > 1]
+    return collapsed, duplicate_groups
+
+
 def _sync_all(sheet_jobs: list) -> dict:
     """
     OCA sync: keep Google Sheet and local DB aligned.
 
+    Sheet rows are first collapsed to one per (client_name, sheet_tab,
+    primary_job_type) key (see collapse_duplicate_sheet_rows) — matching
+    upsert_active_job()'s own key, and ensuring a duplicate pair can never
+    by itself look like a deadline change.
+
     Also detects Deadline to Start changes (comparing the DB's previously
     stored value — read BEFORE this run's upsert — to the sheet's current
-    value) and alerts on them. Both sides are parsed with the shared
-    tolerant date parser (parse_latest_date) before comparing, so a date
-    written in a different but equivalent format doesn't look like a
-    change; the raw sheet strings are still what gets alerted/stored.
+    value, once per key) and alerts on them. Both sides are parsed with
+    the shared tolerant date parser (parse_latest_date) before comparing,
+    so a date written in a different but equivalent format doesn't look
+    like a change; the raw sheet strings are still what gets alerted/stored.
 
     Returns a summary dict of sync counters, plus deadline_changes: a list
     of {client_name, job_type, pm_name, old_deadline, new_deadline} for the
     run summary.
     """
+    sheet_jobs, duplicate_groups = collapse_duplicate_sheet_rows(sheet_jobs)
+    for group in duplicate_groups:
+        client_name, sheet_tab, primary_job_type = group["key"]
+        deadlines = sorted({(r.get("deadline_to_start") or "") for r in group["rows"]})
+        pms = sorted({(r.get("pm_name") or "") for r in group["rows"]})
+        logger.warning(
+            f"Duplicate sheet rows for (client_name={client_name!r}, sheet_tab={sheet_tab!r}, "
+            f"primary_job_type={primary_job_type!r}): {len(group['rows'])} rows — "
+            f"deadlines seen: {deadlines}, PMs seen: {pms} — using the last row"
+        )
+
     from db.state_store import get_all_active_jobs
-    db_map: dict[tuple[str, str], dict] = {
-        (j["client_name"], j.get("job_type") or ""): j for j in get_all_active_jobs()
-    }
+    db_map: dict[tuple, dict] = {_sheet_sync_key(j): j for j in get_all_active_jobs()}
 
     synced = 0
     errors = 0
@@ -81,7 +129,7 @@ def _sync_all(sheet_jobs: list) -> dict:
         job_type = job.get("job_type", "").strip()
         old_deadline_raw = ""
 
-        existing_db = db_map.get((client_name, job_type))
+        existing_db = db_map.get(_sheet_sync_key(job))
         if existing_db:
             old_deadline_raw = (existing_db.get("deadline_to_start") or "").strip()
 
