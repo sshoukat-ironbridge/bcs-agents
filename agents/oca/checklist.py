@@ -262,21 +262,38 @@ def _write_dry_run_files(checklist: dict[str, Any]) -> None:
 
 def send_daily_checklist(checklist: dict[str, Any]) -> None:
     """Deliver the checklist: email to chris_notification_email, Slack to
-    the urgentmatters channel. Respects silent_mode exactly like every
-    other send in this codebase (the send helpers themselves check it).
-    OCA_DRY_RUN=1 builds and logs/writes the checklist but sends nothing.
+    the urgentmatters channel. Both go through utils.outbound.outbound_enabled()
+    — the single gate for silent_mode OR OCA_DRY_RUN=1 — checked here,
+    BEFORE calling send_email/send_message at all (not just relying on
+    those functions' own internal checks), so no send function is ever
+    invoked when disabled.
+
+    OCA_DRY_RUN=1 additionally writes the checklist to ./out/ for
+    inspection; silent_mode alone (not dry run) suppresses sending but
+    does not write any files.
     """
-    if os.getenv("OCA_DRY_RUN", "").strip() == "1":
+    from utils.outbound import outbound_enabled
+
+    is_dry_run = os.getenv("OCA_DRY_RUN", "").strip() == "1"
+    if is_dry_run:
         _write_dry_run_files(checklist)
-        return
 
     subject = "OCA Daily Checklist" if not checklist["is_empty"] else "OCA: nothing needs attention"
+    email_to = cfg("chris_notification_email") or ""
+    email_from = cfg("notification_sender_email") or ""
+    urgentmatters = cfg("slack_urgentmatters_channel") or "urgentmatters"
+
+    if not outbound_enabled():
+        logger.info(f"OUTBOUND SUPPRESSED (checklist email) -> {email_to or '(not configured)'}: {subject}")
+        logger.info(f"OUTBOUND SUPPRESSED (checklist slack) -> #{urgentmatters}")
+        logger.debug(f"OUTBOUND SUPPRESSED (checklist email) body:\n{checklist['html']}")
+        logger.debug(f"OUTBOUND SUPPRESSED (checklist slack) body:\n{checklist['slack_text']}")
+        return
+
     logger.info(f"Delivering checklist — section counts: {checklist['section_counts']}")
     logger.debug(f"Checklist email text:\n{checklist['html']}")
     logger.debug(f"Checklist Slack text:\n{checklist['slack_text']}")
 
-    email_to = cfg("chris_notification_email") or ""
-    email_from = cfg("notification_sender_email") or ""
     if email_to and email_from:
         from integrations.gmail import send_email
         try:
@@ -287,7 +304,6 @@ def send_daily_checklist(checklist: dict[str, Any]) -> None:
         logger.warning("send_daily_checklist: chris_notification_email/notification_sender_email not configured — skipping email")
 
     from integrations.slack import send_message
-    urgentmatters = cfg("slack_urgentmatters_channel") or "urgentmatters"
     try:
         send_message(urgentmatters, checklist["slack_text"])
     except Exception as e:

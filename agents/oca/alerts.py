@@ -1,4 +1,5 @@
 from utils.logger import get_logger
+from utils.outbound import outbound_enabled
 from config.loader import cfg
 from integrations.slack import send_message
 
@@ -9,8 +10,13 @@ def _get_urgentmatters_channel() -> str:
     return cfg("slack_urgentmatters_channel") or "urgentmatters"
 
 
-def _route(message: str) -> None:
-    send_message(_get_urgentmatters_channel(), message)
+def _route(message: str, summary: str = "") -> None:
+    channel = _get_urgentmatters_channel()
+    if not outbound_enabled():
+        logger.info(f"OUTBOUND SUPPRESSED (deadline change alert) -> #{channel}: {summary or message.splitlines()[0]}")
+        logger.debug(f"OUTBOUND SUPPRESSED (deadline change alert) -> #{channel} full text:\n{message}")
+        return
+    send_message(channel, message)
 
 
 def build_deadline_change_message(
@@ -34,4 +40,5 @@ def send_deadline_change_alert(
     old_deadline: str,
     new_deadline: str,
 ) -> None:
-    _route(build_deadline_change_message(client_name, pm_name, old_deadline, new_deadline))
+    summary = f"Deadline to Start changed for {client_name}: {old_deadline} -> {new_deadline}"
+    _route(build_deadline_change_message(client_name, pm_name, old_deadline, new_deadline), summary=summary)

@@ -115,9 +115,11 @@ def _open_dm_channel(client: WebClient, user_id: str) -> "tuple[str | None, str 
 
 
 def send_message(channel: str, text: str) -> bool:
-    from db.state_store import get_config
-    if get_config("silent_mode") == "true":
-        logger.info(f"SILENT MODE — suppressed Slack message to #{channel}: {text[:100]}")
+    from utils.outbound import outbound_enabled
+    if not outbound_enabled():
+        first_line = text.splitlines()[0] if text else ""
+        logger.info(f"OUTBOUND SUPPRESSED (slack message) -> #{channel}: {first_line}")
+        logger.debug(f"OUTBOUND SUPPRESSED (slack message) -> #{channel} full text:\n{text}")
         return True
     ok = _post_message(_client(), channel, text, label=f"#{channel}")
     if ok:
@@ -127,9 +129,10 @@ def send_message(channel: str, text: str) -> bool:
 
 def upload_file(channel: str, content: bytes, filename: str, initial_comment: str = "") -> bool:
     """Upload a file to a Slack channel. Bot token must have files:write scope."""
-    from db.state_store import get_config
-    if get_config("silent_mode") == "true":
-        logger.info(f"SILENT MODE — suppressed Slack file upload to #{channel}: {filename}")
+    from utils.outbound import outbound_enabled
+    if not outbound_enabled():
+        logger.info(f"OUTBOUND SUPPRESSED (slack file upload) -> #{channel}: {filename}")
+        logger.debug(f"OUTBOUND SUPPRESSED (slack file upload) -> #{channel} initial_comment:\n{initial_comment}")
         return True
     try:
         _throttle_for_send()
@@ -163,10 +166,11 @@ def upload_file(channel: str, content: bytes, filename: str, initial_comment: st
 def send_dm(user_id: str, text: str, pm_name: str = "") -> bool:
     if not user_id:
         return False
-    from db.state_store import get_config
-    if get_config("silent_mode") == "true":
+    from utils.outbound import outbound_enabled
+    if not outbound_enabled():
         name = pm_name or user_id
-        logger.info(f"SILENT MODE — suppressed Slack DM to {name}: {text[:100]}")
+        logger.info(f"OUTBOUND SUPPRESSED (slack DM) -> {name}")
+        logger.debug(f"OUTBOUND SUPPRESSED (slack DM) -> {name} full text:\n{text}")
         return True
     client = _client()
     channel_id, error = _open_dm_channel(client, user_id)
