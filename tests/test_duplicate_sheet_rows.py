@@ -118,3 +118,49 @@ def test_genuinely_new_deadline_on_the_winning_row_still_alerts(monkeypatch):
     mock_alert.assert_called_once()
     assert len(result["deadline_changes"]) == 1
     assert result["deadline_changes"][0]["new_deadline"] == "9/1/2026"
+
+
+# ── Idempotency: two consecutive runs with a duplicate pair ────────────
+
+def test_two_consecutive_syncs_with_duplicate_pair_are_idempotent():
+    """Simulates _sync_all() running twice back to back against a
+    persistent fake DB, with fixture sheet_jobs that include the exact
+    Caroline Day duplicate pair. Per spec: the second run must show 0
+    deadline changes."""
+    fake_db: dict[tuple, dict] = {}
+
+    def fake_get_all_active_jobs():
+        return [dict(v) for v in fake_db.values()]
+
+    def fake_upsert_active_job(job):
+        key = (job["client_name"], job.get("sheet_tab") or "", job.get("primary_job_type") or "")
+        fake_db[key] = dict(job)
+
+    def make_sheet_jobs():
+        return [
+            _job(deadline_to_start="7/9/2026"),
+            _job(deadline_to_start="8/13/2026"),
+        ]
+
+    with patch("db.state_store.get_all_active_jobs", side_effect=fake_get_all_active_jobs), \
+         patch("agents.oca.main.upsert_active_job", side_effect=fake_upsert_active_job), \
+         patch("agents.oca.main.send_deadline_change_alert") as mock_alert, \
+         patch("agents.oca.main.set_config"):
+        result1 = _sync_all(make_sheet_jobs())
+        result2 = _sync_all(make_sheet_jobs())
+
+    print(f"Run 1 summary: synced={result1['synced']}, errors={result1['errors']}, "
+          f"deadline_changes={len(result1['deadline_changes'])}")
+    print(f"Run 2 summary: synced={result2['synced']}, errors={result2['errors']}, "
+          f"deadline_changes={len(result2['deadline_changes'])}")
+
+    # Run 1: no prior history in fake_db -> old_deadline_raw is empty for
+    # the winning row, so no change is detected (the code only alerts when
+    # BOTH old and new parse to a date).
+    assert result1["deadline_changes"] == []
+    # Run 2: fake_db now holds 8/13/2026 from run 1 (the winning row both
+    # times) -> still the same value -> still 0 deadline changes.
+    assert result2["deadline_changes"] == []
+    assert mock_alert.call_count == 0
+    # Confirms the DB ends up holding the winning (last) row's value both times.
+    assert fake_db[("Caroline Day", "to_start", "Landscaping")]["deadline_to_start"] == "8/13/2026"
