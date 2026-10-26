@@ -155,6 +155,30 @@ def _get_deadline_warning_days() -> int:
         return DEFAULT_DEADLINE_WARNING_DAYS
 
 
+def _job_key(job: dict) -> tuple:
+    return (job["client_name"], job.get("sheet_tab") or "", job.get("primary_job_type") or "")
+
+
+def enrich_comms_hold(sheet_jobs: list, db_rows: list) -> None:
+    """Mutates each sheet_job's comms_hold/comms_hold_reason to match the DB
+    row for its exact (client_name, sheet_tab, primary_job_type) key.
+
+    A client can have more than one active job (one per job type/tab), so
+    keying by client_name alone — as a previous version of this function
+    did — collapses them: whichever DB row survives the dict comprehension
+    for that client_name has its comms_hold applied to ALL of that
+    client's sheet rows, wrongly clearing a real hold on one job (or
+    wrongly applying a hold from one job onto an unrelated one for the
+    same client). Pure function over two lists of dicts — no DB access —
+    so it's directly unit-testable.
+    """
+    db_by_key = {_job_key(r): r for r in db_rows}
+    for job in sheet_jobs:
+        db_row = db_by_key.get(_job_key(job), {})
+        job["comms_hold"] = db_row.get("comms_hold", False)
+        job["comms_hold_reason"] = db_row.get("comms_hold_reason", "")
+
+
 def run() -> None:
     # AGENT_RUN_ID is set by the dashboard when it spawns this as a subprocess
     # (it already created the row and owns the live SSE log stream + final
@@ -243,13 +267,7 @@ def _run(run_id: "int | None" = None) -> str:
             _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
 
     from db.state_store import get_all_active_jobs
-    db_jobs = {j["client_name"]: j for j in get_all_active_jobs()}
-
-    # Enrich sheet_jobs with comms_hold from DB so check functions can honour it
-    for _job in sheet_jobs:
-        _db = db_jobs.get(_job["client_name"], {})
-        _job["comms_hold"] = _db.get("comms_hold", False)
-        _job["comms_hold_reason"] = _db.get("comms_hold_reason", "")
+    enrich_comms_hold(sheet_jobs, get_all_active_jobs())
 
     # ── Checks ────────────────────────────────────────────────────────────
     # check_missing_pm's existing flag code path (dedup/cooldown via
