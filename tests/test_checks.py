@@ -49,7 +49,7 @@ def test_boundary_day_one_past_warning_days_is_not_listed():
     result = check_deadline_to_start(jobs, TODAY, warning_days=7)
     assert result["soon"] == []
     assert result["overdue"] == []
-    assert result["no_deadline_count"] == 0
+    assert result["no_deadline_to_start"] == []
 
 
 def test_today_itself_counts_as_soon_not_overdue():
@@ -60,32 +60,45 @@ def test_today_itself_counts_as_soon_not_overdue():
     assert result["overdue"] == []
 
 
-def test_missing_deadline_only_counted_not_listed():
-    jobs = [_job(deadline_to_start="")]
+def test_missing_deadline_to_start_is_named_not_just_counted():
+    jobs = [_job(deadline_to_start="", client_name="No Deadline Co")]
     result = check_deadline_to_start(jobs, TODAY)
     assert result["overdue"] == []
     assert result["soon"] == []
-    assert result["no_deadline_count"] == 1
+    assert len(result["no_deadline_to_start"]) == 1
+    assert result["no_deadline_to_start"][0]["client_name"] == "No Deadline Co"
 
 
-def test_unparseable_deadline_counted_as_no_deadline():
+def test_unparseable_deadline_is_named_as_no_deadline():
     jobs = [_job(deadline_to_start="not a date")]
     result = check_deadline_to_start(jobs, TODAY)
-    assert result["no_deadline_count"] == 1
+    assert len(result["no_deadline_to_start"]) == 1
 
 
 def test_held_jobs_are_skipped_entirely():
     jobs = [_job(deadline_to_start="2026-10-18", comms_hold=True)]
     result = check_deadline_to_start(jobs, TODAY)
     assert result["overdue"] == []
-    assert result["no_deadline_count"] == 0
+    assert result["no_deadline_to_start"] == []
+    assert result["no_deadline_in_process_count"] == 0
 
 
-def test_non_to_start_jobs_are_skipped():
-    jobs = [_job(deadline_to_start="2026-10-18", sheet_tab="in_process")]
+def test_in_process_jobs_are_not_named_only_counted_for_footer():
+    jobs = [
+        _job(deadline_to_start="2026-10-18", sheet_tab="in_process"),  # has a deadline — not a "no deadline" case
+        _job(deadline_to_start="", sheet_tab="in_process", client_name="IP No Deadline"),
+    ]
     result = check_deadline_to_start(jobs, TODAY)
     assert result["overdue"] == []
-    assert result["no_deadline_count"] == 0
+    assert result["soon"] == []
+    assert result["no_deadline_to_start"] == []  # In Process jobs never named here
+    assert result["no_deadline_in_process_count"] == 1
+
+
+def test_in_process_held_job_with_no_deadline_not_counted():
+    jobs = [_job(deadline_to_start="", sheet_tab="in_process", comms_hold=True)]
+    result = check_deadline_to_start(jobs, TODAY)
+    assert result["no_deadline_in_process_count"] == 0
 
 
 def test_unassigned_pm_label_when_blank():

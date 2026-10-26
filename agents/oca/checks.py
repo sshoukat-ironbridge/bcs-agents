@@ -133,38 +133,56 @@ DEFAULT_DEADLINE_WARNING_DAYS = 7
 
 
 def check_deadline_to_start(sheet_jobs: list, today: date, warning_days: int = DEFAULT_DEADLINE_WARNING_DAYS) -> dict[str, Any]:
-    """Classify To Start jobs (not on comms_hold) by Deadline to Start.
+    """Classify jobs (not on comms_hold) by Deadline to Start.
 
     Pure function over job dicts and an explicit `today` — no DB/clock
     access — so it's directly unit-testable. The caller resolves
     `warning_days` from app_config (oca_deadline_warning_days, default 7).
 
-    - overdue: deadline is before `today` (days_until is negative)
-    - soon: deadline is today or within the next `warning_days` days (inclusive)
-    Jobs with a missing or unparseable deadline_to_start are not listed
-    individually — only counted in no_deadline_count, for the checklist
-    footer.
+    - overdue: To Start job, deadline before `today` (days_until negative)
+    - soon: To Start job, deadline today or within the next `warning_days`
+      days (inclusive)
+    - no_deadline_to_start: To Start jobs with a missing/unparseable
+      deadline_to_start — named individually (unlike overdue/soon, these
+      have no date to sort or compare by)
+    - no_deadline_in_process_count: In Process jobs with a missing/
+      unparseable deadline_to_start — footer-only, never named
+      individually (In Process jobs aren't otherwise deadline-tracked)
 
     Returns:
         {
             "overdue": [{"client_name", "job_type", "pm_name", "deadline", "days_until"}, ...],
             "soon": [same shape, days_until >= 0],
-            "no_deadline_count": int,
+            "no_deadline_to_start": [{"client_name", "job_type", "pm_name"}, ...],
+            "no_deadline_in_process_count": int,
         }
     """
     overdue: list[dict[str, Any]] = []
     soon: list[dict[str, Any]] = []
-    no_deadline_count = 0
+    no_deadline_to_start: list[dict[str, Any]] = []
+    no_deadline_in_process_count = 0
 
     for job in sheet_jobs:
-        if job.get("sheet_tab") != "to_start":
+        sheet_tab = job.get("sheet_tab")
+        if sheet_tab not in ("to_start", "in_process"):
             continue
         if job.get("comms_hold"):
             continue
 
         deadline = parse_latest_date(job.get("deadline_to_start", ""))
+
+        if sheet_tab == "in_process":
+            if deadline is None:
+                no_deadline_in_process_count += 1
+            continue
+
+        # sheet_tab == "to_start"
         if deadline is None:
-            no_deadline_count += 1
+            no_deadline_to_start.append({
+                "client_name": job.get("client_name", ""),
+                "job_type": job.get("job_type", ""),
+                "pm_name": job.get("pm_name") or "unassigned",
+            })
             continue
 
         days_until = (deadline - today).days
@@ -180,7 +198,12 @@ def check_deadline_to_start(sheet_jobs: list, today: date, warning_days: int = D
         elif days_until <= warning_days:
             soon.append(item)
 
-    return {"overdue": overdue, "soon": soon, "no_deadline_count": no_deadline_count}
+    return {
+        "overdue": overdue,
+        "soon": soon,
+        "no_deadline_to_start": no_deadline_to_start,
+        "no_deadline_in_process_count": no_deadline_in_process_count,
+    }
 
 
 # Retire guard: skip retiring jobs this run if it would retire more than
