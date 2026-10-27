@@ -71,3 +71,18 @@ Requires all three: `ALLOW_DB_CLEANUP=1`, an existing non-empty
 `--backup-file`, and typing the database name (read from `POSTGRES_URL`) to
 confirm. Runs as one transaction using `DROP TABLE IF EXISTS` /
 `ALTER TABLE ... DROP COLUMN IF EXISTS`, so it's idempotent (safe to re-run).
+
+### Local apply (Step 5) — verified
+
+Ran against the local DB: backup taken (`backups/pre_cleanup.sql`), dry run
+printed real dead data (4 `dialpad_contact_history` rows, 54
+`customer_email_history` rows, 67 non-null `hubspot_owner_name` values, 182
+non-null `escalation_flag` values, and a full set of `hubspot_*`/
+`casey_emails_paused*` app_config keys), `--apply` dropped them all in one
+transaction, and a re-run of the dry run reported everything "already
+absent"/"none found" (idempotent). Two back-to-back OCA dry runs afterward
+(`OCA_DRY_RUN=1`, `silent_mode=true`) produced identical section counts and
+checklist content to each other and to the pre-cleanup checklist (same
+section composition and line formats; absolute counts drift slightly
+run-to-run only because of ordinary deadline/retirement churn, not the
+cleanup). Full test suite: 82 passed.
