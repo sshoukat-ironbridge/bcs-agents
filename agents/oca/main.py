@@ -7,6 +7,8 @@ from agents.oca.checks import (
     check_missing_pm,
     check_deadline_to_start,
     classify_pm_issues,
+    find_duplicate_sheet_rows,
+    sheet_row_key,
     DEFAULT_DEADLINE_WARNING_DAYS,
     MAX_RETIRE_COUNT,
     MAX_RETIRE_FRACTION,
@@ -48,12 +50,6 @@ _ALL_FLAG_TYPES = [
 ]
 
 
-def _sheet_sync_key(job: dict) -> tuple:
-    """The same (client_name, sheet_tab, primary_job_type) triple
-    upsert_active_job() matches DB rows by."""
-    return (job["client_name"], job.get("sheet_tab") or "", job.get("primary_job_type") or "")
-
-
 def collapse_duplicate_sheet_rows(sheet_jobs: list) -> "tuple[list, list]":
     """Collapse sheet_jobs to one row per (client_name, sheet_tab,
     primary_job_type) key — last row wins, matching upsert_active_job()'s
@@ -63,22 +59,25 @@ def collapse_duplicate_sheet_rows(sheet_jobs: list) -> "tuple[list, list]":
     produce a spurious "changed" alert: only ever one row per key is
     compared against the previous run's stored value.
 
-    Returns (collapsed_jobs, duplicate_groups) where duplicate_groups is
-    a list of {"key": (client_name, sheet_tab, primary_job_type), "rows":
-    [job, ...]} for every key that had more than one row this run, so the
-    caller can log a warning naming what differed between them.
+    This collapsing is for the DB sync path ONLY — it does not affect
+    the sheet_jobs list used by checks/the checklist (see the call site
+    comment in _run() for why they intentionally keep every raw row).
+
+    Returns (collapsed_jobs, duplicate_groups) — duplicate_groups is from
+    find_duplicate_sheet_rows() (agents.oca.checks), reused here so the
+    DB-sync collapse and the checklist's "Duplicate sheet rows" section
+    agree on exactly what counts as a duplicate.
     """
-    by_key: dict[tuple, list[dict]] = {}
+    duplicate_groups = find_duplicate_sheet_rows(sheet_jobs)
+    by_key: dict[tuple, dict] = {}
     order: list[tuple] = []
     for job in sheet_jobs:
-        key = _sheet_sync_key(job)
+        key = sheet_row_key(job)
         if key not in by_key:
             order.append(key)
-            by_key[key] = []
-        by_key[key].append(job)
+        by_key[key] = job  # last row wins
 
-    collapsed = [by_key[key][-1] for key in order]
-    duplicate_groups = [{"key": key, "rows": rows} for key, rows in by_key.items() if len(rows) > 1]
+    collapsed = [by_key[key] for key in order]
     return collapsed, duplicate_groups
 
 
@@ -109,12 +108,12 @@ def _sync_all(sheet_jobs: list) -> dict:
         pms = sorted({(r.get("pm_name") or "") for r in group["rows"]})
         logger.warning(
             f"Duplicate sheet rows for (client_name={client_name!r}, sheet_tab={sheet_tab!r}, "
-            f"primary_job_type={primary_job_type!r}): {len(group['rows'])} rows — "
-            f"deadlines seen: {deadlines}, PMs seen: {pms} — using the last row"
+            f"primary_job_type={primary_job_type!r}): {len(group['rows'])} rows, "
+            f"deadlines seen: {deadlines}, PMs seen: {pms}, using the last row"
         )
 
     from db.state_store import get_all_active_jobs
-    db_map: dict[tuple, dict] = {_sheet_sync_key(j): j for j in get_all_active_jobs()}
+    db_map: dict[tuple, dict] = {sheet_row_key(j): j for j in get_all_active_jobs()}
 
     synced = 0
     errors = 0
@@ -129,7 +128,7 @@ def _sync_all(sheet_jobs: list) -> dict:
         job_type = job.get("job_type", "").strip()
         old_deadline_raw = ""
 
-        existing_db = db_map.get(_sheet_sync_key(job))
+        existing_db = db_map.get(sheet_row_key(job))
         if existing_db:
             old_deadline_raw = (existing_db.get("deadline_to_start") or "").strip()
 
@@ -181,7 +180,7 @@ def _sync_all(sheet_jobs: list) -> dict:
             errors += 1
 
     set_config("last_sync_at", datetime.utcnow().isoformat())
-    logger.info(f"OCA sync complete — sheet jobs: {len(sheet_jobs)}, DB upserted: {synced}, errors: {errors}")
+    logger.info(f"OCA sync complete: sheet jobs: {len(sheet_jobs)}, DB upserted: {synced}, errors: {errors}")
     held_jobs = [j for j in db_map.values() if j.get("comms_hold")]
     logger.info(f"Jobs on comms hold (skipped by OCA): {len(held_jobs)}")
     return {"synced": synced, "errors": errors, "deadline_changes": deadline_changes}
@@ -199,7 +198,7 @@ def _get_deadline_warning_days() -> int:
     try:
         return int(raw) if raw and raw.strip() else DEFAULT_DEADLINE_WARNING_DAYS
     except (TypeError, ValueError):
-        logger.warning(f"oca_deadline_warning_days={raw!r} is invalid — falling back to {DEFAULT_DEADLINE_WARNING_DAYS}")
+        logger.warning(f"oca_deadline_warning_days={raw!r} is invalid, falling back to {DEFAULT_DEADLINE_WARNING_DAYS}")
         return DEFAULT_DEADLINE_WARNING_DAYS
 
 
@@ -249,7 +248,7 @@ def run() -> None:
         try:
             timestamp = datetime.now(timezone.utc).isoformat()
             msg = (
-                f"🔴 Agent crash — OCA failed at {timestamp}\n"
+                f"🔴 Agent crash: OCA failed at {timestamp}\n"
                 f"Error: {e}\n"
                 f"The next scheduled run will retry automatically."
             )
@@ -263,10 +262,10 @@ def run() -> None:
 def _run(run_id: "int | None" = None) -> str:
     # ── Guards ────────────────────────────────────────────────────────────
     if not cfg("slack_bot_token"):
-        logger.error("OCA: slack_bot_token not configured in DB — aborting")
+        logger.error("OCA: slack_bot_token not configured in DB, aborting")
         return "Aborted: slack_bot_token not configured"
     if not cfg("google_sheets_id"):
-        logger.error("OCA: google_sheets_id not configured in DB — aborting")
+        logger.error("OCA: google_sheets_id not configured in DB, aborting")
         return "Aborted: google_sheets_id not configured"
 
     logger.info("OCA starting run")
@@ -279,10 +278,10 @@ def _run(run_id: "int | None" = None) -> str:
     try:
         sheet_jobs = get_active_jobs()
     except SheetFetchError as e:
-        logger.error(f"OCA: sheet fetch failed — aborting before any upsert/retire: {e}")
+        logger.error(f"OCA: sheet fetch failed, aborting before any upsert/retire: {e}")
         raise
     if not sheet_jobs:
-        logger.error("OCA: No sheet jobs loaded — aborting")
+        logger.error("OCA: No sheet jobs loaded, aborting")
         return "Aborted: no sheet jobs loaded"
     logger.info(f"OCA loaded {len(sheet_jobs)} sheet jobs")
     _checkpoint(run_id, f"OCA loaded {len(sheet_jobs)} sheet jobs")
@@ -303,23 +302,31 @@ def _run(run_id: "int | None" = None) -> str:
     if retire_guard_triggered:
         retired = 0
         logger.warning(
-            f"Retire guard: skipping retire — {candidate_count} job(s) would be retired "
+            f"Retire guard: skipping retire, {candidate_count} job(s) would be retired "
             f"out of {total_active_count} active (thresholds: >{MAX_RETIRE_COUNT} count "
             f"or >{MAX_RETIRE_FRACTION:.0%} of active)"
         )
-        _checkpoint(run_id, f"Retire guard triggered — skipped retiring {candidate_count} job(s)")
+        _checkpoint(run_id, f"Retire guard triggered, skipped retiring {candidate_count} job(s)")
     else:
         retired = reconcile_retired_jobs(sheet_keys)
         if retired:
-            logger.info(f"Reconciliation: {retired} job(s) retired — no longer in sheet")
-            _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired — no longer in sheet")
+            logger.info(f"Reconciliation: {retired} job(s) retired, no longer in sheet")
+            _checkpoint(run_id, f"Reconciliation: {retired} job(s) retired, no longer in sheet")
 
     from db.state_store import get_all_active_jobs
     enrich_comms_hold(sheet_jobs, get_all_active_jobs())
 
     # ── Checks ────────────────────────────────────────────────────────────
+    # Deliberate design choice: sheet_jobs here still holds every raw sheet
+    # row, duplicates included; it is NOT the deduplicated list
+    # collapse_duplicate_sheet_rows() builds inside _sync_all(). The DB
+    # tracks exactly one row per (client, tab, primary job type) key (that
+    # collapse is for the DB sync only); the checklist instead shows every
+    # sheet row, so no real job is ever hidden from a human reading it;
+    # duplicate keys get their own "Duplicate sheet rows" section instead.
+    #
     # check_missing_pm's existing flag code path (dedup/cooldown via
-    # oca_flags) is untouched — same as before this stage.
+    # oca_flags) is untouched, same as before this stage.
     missing_pm_flags = check_missing_pm(sheet_jobs)
     _checkpoint(run_id, f"Checks: missing_pm={len(missing_pm_flags)}")
 
@@ -352,11 +359,12 @@ def _run(run_id: "int | None" = None) -> str:
     warning_days = _get_deadline_warning_days()
     deadline_result = check_deadline_to_start(sheet_jobs, today_ny(), warning_days=warning_days)
     pm_issues = classify_pm_issues(sheet_jobs)
+    duplicate_groups = find_duplicate_sheet_rows(sheet_jobs)
     _checkpoint(
         run_id,
         f"Checklist checks: deadline_changes={len(deadline_changes)}, overdue={len(deadline_result['overdue'])}, "
         f"soon={len(deadline_result['soon'])}, blank_pm={len(pm_issues['blank'])}, "
-        f"unrecognized_pm={len(pm_issues['unrecognized'])}",
+        f"unrecognized_pm={len(pm_issues['unrecognized'])}, duplicate_keys={len(duplicate_groups)}",
     )
 
     # ── Build checklist ───────────────────────────────────────────────────
@@ -365,8 +373,9 @@ def _run(run_id: "int | None" = None) -> str:
         "in_process": sum(1 for j in sheet_jobs if j.get("sheet_tab") == "in_process"),
         "on_hold": sum(1 for j in sheet_jobs if j.get("comms_hold")),
         "retired_this_run": retired,
+        "tracked_jobs": len({sheet_row_key(j) for j in sheet_jobs}),
     }
-    checklist = build_checklist(deadline_changes, deadline_result, pm_issues, counts, warning_days)
+    checklist = build_checklist(deadline_changes, deadline_result, pm_issues, duplicate_groups, counts, warning_days)
 
     # ── Deliver ───────────────────────────────────────────────────────────
     send_daily_checklist(checklist)
@@ -381,10 +390,11 @@ def _run(run_id: "int | None" = None) -> str:
         f"{retire_summary}; "
         f"checklist: {len(deadline_changes)} deadline changes, "
         f"{len(deadline_result['overdue'])} overdue, {len(deadline_result['soon'])} soon, "
-        f"{len(pm_issues['blank'])} no PM, {len(pm_issues['unrecognized'])} unrecognized PM"
+        f"{len(pm_issues['blank'])} no PM, {len(pm_issues['unrecognized'])} unrecognized PM, "
+        f"{len(duplicate_groups)} duplicate keys"
     )
-    logger.info(f"OCA run complete — {run_summary}")
-    _checkpoint(run_id, f"OCA run complete — {run_summary}")
+    logger.info(f"OCA run complete: {run_summary}")
+    _checkpoint(run_id, f"OCA run complete: {run_summary}")
 
     return run_summary
 

@@ -7,8 +7,9 @@ in this fixed order (empty ones omitted):
   3. Starting soon (within N days)
   4. No PM assigned
   5. PM name not recognized
-  6. No readable deadline (To Start)
-  7. Footer counts
+  6. Duplicate sheet rows
+  7. No readable deadline (To Start)
+  8. Footer counts
 
 Each section states its Reason / Action / Clears when ONCE, in the
 section header — not repeated on every item line.
@@ -52,8 +53,8 @@ _DEADLINE_CHANGED = (
     "deadline_changed",
     "Deadline to Start changed (this run)",
     "These jobs had their Deadline to Start updated in the sheet during this run.",
-    "No action needed — informational, confirms the update was picked up.",
-    "Automatically — this section only ever shows this run's changes.",
+    "No action needed, informational, confirms the update was picked up.",
+    "Automatically: this section only ever shows this run's changes.",
 )
 _OVERDUE = (
     "overdue",
@@ -82,6 +83,14 @@ _PM_UNRECOGNIZED = (
     "The PM name in the sheet doesn't match any configured PM.",
     "Add this person in PM config or fix the sheet.",
     "The name matches a configured PM or is corrected in the sheet.",
+)
+_DUPLICATE_ROWS = (
+    "duplicate_sheet_rows",
+    "Duplicate sheet rows",
+    "These rows have the same client, tab and primary job type, so OCA tracks only the last one in its database. "
+    "Deadline-change alerts and holds apply to that row only.",
+    "Make the job type distinct in the sheet or confirm they are one job.",
+    "Each client, tab and job type combination appears once.",
 )
 _NO_DEADLINE = (
     "no_deadline_to_start",
@@ -118,7 +127,24 @@ def _no_pm_line(item: dict[str, Any]) -> str:
 def _unrecognized_pm_line(item: dict[str, Any]) -> str:
     clients = ", ".join(item.get("clients", []))
     count = item.get("job_count", 0)
-    return f"'{item.get('raw_name', '')}' — {count} job{'s' if count != 1 else ''} ({clients})"
+    return f"'{item.get('raw_name', '')}': {count} job{'s' if count != 1 else ''} ({clients})"
+
+
+def _duplicate_row_line(group: dict[str, Any]) -> str:
+    client_name, sheet_tab, primary_job_type = group["key"]
+    rows = group["rows"]
+    diffs = []
+    for label, field in (
+        ("deadlines", "deadline_to_start"),
+        ("start dates", "start_date"),
+        ("secondary job types", "job_type"),
+        ("PMs", "pm_name"),
+    ):
+        values = [r.get(field) or "" for r in rows]
+        if len(set(values)) > 1:
+            diffs.append(f"{label} {values}")
+    diff_text = f": {'; '.join(diffs)}" if diffs else ""
+    return f"{client_name} ({sheet_tab}, {primary_job_type}){diff_text}"
 
 
 def _no_deadline_line(item: dict[str, Any]) -> str:
@@ -131,6 +157,7 @@ def _build_sections(
     deadline_changes: list[dict[str, Any]],
     deadline_result: dict[str, Any],
     pm_issues: dict[str, Any],
+    duplicate_groups: list[dict[str, Any]],
     warning_days: int,
 ) -> list[dict[str, Any]]:
     """Returns the ordered list of non-empty sections, each with its
@@ -167,6 +194,11 @@ def _build_sections(
         sections.append({"key": key, "title": title, "reason": reason, "action": action, "clears": clears,
                           "lines": [_unrecognized_pm_line(i) for i in unrecognized]})
 
+    if duplicate_groups:
+        key, title, reason, action, clears = _DUPLICATE_ROWS
+        sections.append({"key": key, "title": title, "reason": reason, "action": action, "clears": clears,
+                          "lines": [_duplicate_row_line(g) for g in sorted(duplicate_groups, key=lambda g: g["key"][0])]})
+
     no_deadline = sorted(deadline_result.get("no_deadline_to_start", []), key=lambda i: i["client_name"])
     if no_deadline:
         key, title, reason, action, clears = _NO_DEADLINE
@@ -180,6 +212,7 @@ def build_checklist(
     deadline_changes: list[dict[str, Any]],
     deadline_result: dict[str, Any],
     pm_issues: dict[str, Any],
+    duplicate_groups: list[dict[str, Any]],
     counts: dict[str, Any],
     warning_days: int,
 ) -> dict[str, Any]:
@@ -190,21 +223,24 @@ def build_checklist(
         deadline_result: from check_deadline_to_start() — overdue, soon,
             no_deadline_to_start, no_deadline_in_process_count.
         pm_issues: from classify_pm_issues() — blank, unrecognized.
-        counts: footer counts — to_start, in_process, on_hold, retired_this_run.
+        duplicate_groups: from find_duplicate_sheet_rows() (agents.oca.checks).
+        counts: footer counts — to_start, in_process, on_hold,
+            retired_this_run, tracked_jobs (distinct keys in the DB).
         warning_days: the oca_deadline_warning_days value used this run.
 
     Returns:
         {"html": str, "slack_text": str, "is_empty": bool, "section_counts": dict}
     """
-    sections = _build_sections(deadline_changes, deadline_result, pm_issues, warning_days)
+    sections = _build_sections(deadline_changes, deadline_result, pm_issues, duplicate_groups, warning_days)
     section_counts = {s["key"]: len(s["lines"]) for s in sections}
     is_empty = not sections
 
     footer_line = (
-        f"Active jobs — To Start: {counts.get('to_start', 0)}, In Process: {counts.get('in_process', 0)}. "
+        f"Sheet rows, To Start: {counts.get('to_start', 0)}, In Process: {counts.get('in_process', 0)}. "
+        f"Tracked jobs: {counts.get('tracked_jobs', 0)}. "
         f"On hold: {counts.get('on_hold', 0)}. "
         f"Retired this run: {counts.get('retired_this_run', 0)}. "
-        f"No readable deadline — To Start: {len(deadline_result.get('no_deadline_to_start', []))}, "
+        f"No readable deadline, To Start: {len(deadline_result.get('no_deadline_to_start', []))}, "
         f"In Process: {deadline_result.get('no_deadline_in_process_count', 0)}."
     )
 
@@ -255,9 +291,9 @@ def _write_dry_run_files(checklist: dict[str, Any]) -> None:
     txt_path = out_dir / f"oca_checklist_{stamp}.txt"
     html_path.write_text(checklist["html"])
     txt_path.write_text(checklist["slack_text"])
-    logger.info(f"OCA_DRY_RUN — wrote {html_path} and {txt_path}; section counts: {checklist['section_counts']}")
-    logger.debug(f"OCA_DRY_RUN — email text:\n{checklist['html']}")
-    logger.debug(f"OCA_DRY_RUN — slack text:\n{checklist['slack_text']}")
+    logger.info(f"OCA_DRY_RUN: wrote {html_path} and {txt_path}; section counts: {checklist['section_counts']}")
+    logger.debug(f"OCA_DRY_RUN: email text:\n{checklist['html']}")
+    logger.debug(f"OCA_DRY_RUN: slack text:\n{checklist['slack_text']}")
 
 
 def send_daily_checklist(checklist: dict[str, Any]) -> None:
@@ -290,7 +326,7 @@ def send_daily_checklist(checklist: dict[str, Any]) -> None:
         logger.debug(f"OUTBOUND SUPPRESSED (checklist slack) body:\n{checklist['slack_text']}")
         return
 
-    logger.info(f"Delivering checklist — section counts: {checklist['section_counts']}")
+    logger.info(f"Delivering checklist: section counts: {checklist['section_counts']}")
     logger.debug(f"Checklist email text:\n{checklist['html']}")
     logger.debug(f"Checklist Slack text:\n{checklist['slack_text']}")
 
@@ -301,7 +337,7 @@ def send_daily_checklist(checklist: dict[str, Any]) -> None:
         except Exception as e:
             logger.error(f"send_daily_checklist: email failed: {e}")
     else:
-        logger.warning("send_daily_checklist: chris_notification_email/notification_sender_email not configured — skipping email")
+        logger.warning("send_daily_checklist: chris_notification_email/notification_sender_email not configured, skipping email")
 
     from integrations.slack import send_message
     try:

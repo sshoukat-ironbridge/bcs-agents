@@ -8,6 +8,36 @@ from utils.timeutil import today_ny
 logger = get_logger("oca.checks")
 
 
+def sheet_row_key(job: dict) -> tuple:
+    """The (client_name, sheet_tab, primary_job_type) triple that both the
+    DB sync (upsert_active_job, agents.oca.main) and this duplicate
+    detection key jobs by."""
+    return (job["client_name"], job.get("sheet_tab") or "", job.get("primary_job_type") or "")
+
+
+def find_duplicate_sheet_rows(sheet_jobs: list) -> list[dict[str, Any]]:
+    """Groups sheet_jobs by sheet_row_key() and returns only the groups
+    with more than one row — the duplicate keys, for the checklist's
+    "Duplicate sheet rows" section. Does not collapse or modify
+    sheet_jobs; purely a detection pass. (The DB sync path,
+    agents.oca.main.collapse_duplicate_sheet_rows, does its own
+    collapsing of a separate copy for upserting — checks/checklist
+    intentionally keep every raw row; see the call site in
+    agents/oca/main.py for why.)
+
+    Returns [{"key": (client_name, sheet_tab, primary_job_type), "rows": [job, ...]}, ...]
+    """
+    by_key: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for job in sheet_jobs:
+        key = sheet_row_key(job)
+        if key not in by_key:
+            order.append(key)
+            by_key[key] = []
+        by_key[key].append(job)
+    return [{"key": key, "rows": by_key[key]} for key in order if len(by_key[key]) > 1]
+
+
 def _get_pm_config() -> list:
     try:
         from db.state_store import get_pm_list
@@ -45,7 +75,7 @@ def check_missing_pm(sheet_jobs: list, contact_date_map: "dict | None" = None) -
     flags = []
     for job in sheet_jobs:
         if job.get("comms_hold"):
-            logger.info(f"HOLD SKIP {job.get('client_name')} — comms hold active, reason: {job.get('comms_hold_reason')}")
+            logger.info(f"HOLD SKIP {job.get('client_name')}: comms hold active, reason: {job.get('comms_hold_reason')}")
             continue
         client_name = job["client_name"]
         pm_name = job.get("pm_name", "").strip()

@@ -4,7 +4,7 @@ from agents.oca.checklist import build_checklist, SLACK_PER_SECTION_CAP
 
 EMPTY_DEADLINE_RESULT = {"overdue": [], "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0}
 EMPTY_PM_ISSUES = {"blank": [], "unrecognized": []}
-COUNTS = {"to_start": 3, "in_process": 5, "on_hold": 1, "retired_this_run": 0}
+COUNTS = {"to_start": 3, "in_process": 5, "on_hold": 1, "retired_this_run": 0, "tracked_jobs": 8}
 
 
 def _overdue_item(client, days_ago, job_type="Deck", pm="Gustavo"):
@@ -18,7 +18,7 @@ def _soon_item(client, deadline, job_type="Deck", pm="Gustavo"):
 
 
 def test_all_sections_empty_sends_nothing_needs_attention():
-    result = build_checklist([], EMPTY_DEADLINE_RESULT, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], EMPTY_DEADLINE_RESULT, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert result["is_empty"] is True
     assert "nothing needs attention" in result["slack_text"]
     assert "nothing needs attention" in result["html"]
@@ -38,7 +38,7 @@ def test_section_order_matches_spec():
         "blank": [{"client_name": "D", "job_type": "Deck"}],
         "unrecognized": [{"raw_name": "E", "job_count": 1, "clients": ["E Client"]}],
     }
-    result = build_checklist(deadline_changes, deadline_result, pm_issues, COUNTS, warning_days=7)
+    result = build_checklist(deadline_changes, deadline_result, pm_issues, [], COUNTS, warning_days=7)
 
     titles_in_order = [
         "Deadline to Start changed",
@@ -57,7 +57,7 @@ def test_reason_action_clears_once_per_section_not_per_line():
         "overdue": [_overdue_item("A", 1), _overdue_item("B", 2), _overdue_item("C", 3)],
         "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert result["slack_text"].count("Reason:") == 1
     assert result["slack_text"].count("Action:") == 1
     assert result["slack_text"].count("Clears when:") == 1
@@ -71,7 +71,7 @@ def test_overdue_item_line_format():
                       "deadline": date(2026, 10, 18), "days_until": -3}],
         "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert "Acme (Deck Build, PM: Gustavo): deadline 2026-10-18 (3 days ago)" in result["slack_text"]
 
 
@@ -82,7 +82,7 @@ def test_soon_item_line_format_uses_in_n_days():
                    "deadline": date(2026, 10, 25), "days_until": 4}],
         "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert "Beta (Roof, PM: unassigned): deadline 2026-10-25 (in 4 days)" in result["slack_text"]
 
 
@@ -93,7 +93,7 @@ def test_job_type_truncated_to_60_chars_with_ellipsis():
                       "deadline": date(2026, 10, 18), "days_until": -1}],
         "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert long_job_type not in result["slack_text"]
     assert "X" * 59 + "…" in result["slack_text"]
 
@@ -103,7 +103,7 @@ def test_overdue_sorted_most_days_overdue_first():
         "overdue": [_overdue_item("Least", 1), _overdue_item("Most", 10), _overdue_item("Mid", 5)],
         "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     text = result["slack_text"]
     assert text.index("Most") < text.index("Mid") < text.index("Least")
 
@@ -118,7 +118,7 @@ def test_soon_sorted_by_deadline_ascending_then_client_name():
         ],
         "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     text = result["slack_text"]
     assert text.index("Alpha") < text.index("Zebra") < text.index("Middle")
 
@@ -126,7 +126,7 @@ def test_soon_sorted_by_deadline_ascending_then_client_name():
 def test_per_section_slack_truncation_with_more_count():
     overdue = [_overdue_item(f"Client{i}", i + 1) for i in range(SLACK_PER_SECTION_CAP + 3)]
     deadline_result = {"overdue": overdue, "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0}
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     item_lines = [l for l in result["slack_text"].splitlines() if l.startswith("- ")]
     assert len(item_lines) == SLACK_PER_SECTION_CAP
     assert "+3 more, see the email" in result["slack_text"]
@@ -136,7 +136,7 @@ def test_every_nonempty_section_appears_even_when_another_is_truncated():
     overdue = [_overdue_item(f"Client{i}", i + 1) for i in range(SLACK_PER_SECTION_CAP + 5)]
     deadline_result = {"overdue": overdue, "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0}
     pm_issues = {"blank": [{"client_name": "Solo", "job_type": "Fence"}], "unrecognized": []}
-    result = build_checklist([], deadline_result, pm_issues, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, pm_issues, [], COUNTS, warning_days=7)
     assert "No PM assigned" in result["slack_text"]
     assert "Solo" in result["slack_text"]
 
@@ -144,7 +144,7 @@ def test_every_nonempty_section_appears_even_when_another_is_truncated():
 def test_html_is_untrimmed_even_when_slack_is_truncated():
     overdue = [_overdue_item(f"Client{i}", i + 1) for i in range(SLACK_PER_SECTION_CAP + 5)]
     deadline_result = {"overdue": overdue, "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0}
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     for i in range(SLACK_PER_SECTION_CAP + 5):
         assert f"Client{i}" in result["html"]
     assert "+N more" not in result["html"]
@@ -156,11 +156,11 @@ def test_no_readable_deadline_section_names_to_start_only():
         "no_deadline_to_start": [{"client_name": "Unreadable Co", "job_type": "Deck", "pm_name": "G"}],
         "no_deadline_in_process_count": 4,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert "No readable deadline" in result["slack_text"]
     assert "Unreadable Co" in result["slack_text"]
-    # In Process no-deadline jobs are never named — only counted in the footer.
-    assert "No readable deadline — To Start: 1, In Process: 4." in result["slack_text"]
+    # In Process no-deadline jobs are never named, only counted in the footer.
+    assert "No readable deadline, To Start: 1, In Process: 4." in result["slack_text"]
 
 
 def test_pm_sections_use_header_level_text():
@@ -168,11 +168,40 @@ def test_pm_sections_use_header_level_text():
         "blank": [{"client_name": "Gamma", "job_type": "Fence"}],
         "unrecognized": [{"raw_name": "Mystery Person", "job_count": 2, "clients": ["Delta", "Epsilon"]}],
     }
-    result = build_checklist([], EMPTY_DEADLINE_RESULT, pm_issues, COUNTS, warning_days=7)
+    result = build_checklist([], EMPTY_DEADLINE_RESULT, pm_issues, [], COUNTS, warning_days=7)
     assert "No PM assigned" in result["slack_text"]
     assert "PM name not recognized" in result["slack_text"]
     assert "Add this person in PM config or fix the sheet" in result["slack_text"]
     assert "Mystery Person" in result["slack_text"]
+
+
+def test_footer_labels_sheet_rows_and_tracked_jobs():
+    result = build_checklist([], EMPTY_DEADLINE_RESULT, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
+    assert "Sheet rows, To Start: 3, In Process: 5." in result["slack_text"]
+    assert "Tracked jobs: 8." in result["slack_text"]
+
+
+def test_duplicate_sheet_rows_section_appears_after_pm_unrecognized():
+    pm_issues = {
+        "blank": [],
+        "unrecognized": [{"raw_name": "Mystery Person", "job_count": 1, "clients": ["Delta"]}],
+    }
+    duplicate_groups = [{
+        "key": ("Joann Lynch", "to_start", "Deck"),
+        "rows": [
+            {"client_name": "Joann Lynch", "sheet_tab": "to_start", "primary_job_type": "Deck",
+             "deadline_to_start": "7/9/2026", "start_date": "7/1/2026", "job_type": "Deck", "pm_name": "Gustavo"},
+            {"client_name": "Joann Lynch", "sheet_tab": "to_start", "primary_job_type": "Deck",
+             "deadline_to_start": "8/13/2026", "start_date": "7/1/2026", "job_type": "Deck", "pm_name": "Gustavo"},
+        ],
+    }]
+    result = build_checklist([], EMPTY_DEADLINE_RESULT, pm_issues, duplicate_groups, COUNTS, warning_days=7)
+
+    text = result["slack_text"]
+    assert text.index("PM name not recognized") < text.index("Duplicate sheet rows")
+    assert result["section_counts"]["duplicate_sheet_rows"] == 1
+    assert "Joann Lynch (to_start, Deck)" in text
+    assert "deadlines ['7/9/2026', '8/13/2026']" in text
 
 
 def test_section_counts_reflect_item_counts():
@@ -181,7 +210,7 @@ def test_section_counts_reflect_item_counts():
         "soon": [_soon_item("C", date(2026, 10, 25))],
         "no_deadline_to_start": [], "no_deadline_in_process_count": 0,
     }
-    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, COUNTS, warning_days=7)
+    result = build_checklist([], deadline_result, EMPTY_PM_ISSUES, [], COUNTS, warning_days=7)
     assert result["section_counts"]["overdue"] == 2
     assert result["section_counts"]["soon"] == 1
     assert "no_pm" not in result["section_counts"]

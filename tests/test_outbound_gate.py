@@ -45,7 +45,8 @@ def test_checklist_calls_no_send_function_when_dry_run(monkeypatch, tmp_path):
     checklist = build_checklist(
         [], {"overdue": [], "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0},
         {"blank": [], "unrecognized": []},
-        {"to_start": 1, "in_process": 1, "on_hold": 0, "retired_this_run": 0},
+        [],
+        {"to_start": 1, "in_process": 1, "on_hold": 0, "retired_this_run": 0, "tracked_jobs": 1},
         warning_days=7,
     )
 
@@ -88,7 +89,8 @@ def test_checklist_sends_when_not_dry_run_and_silent_mode_off(monkeypatch, tmp_p
     checklist = build_checklist(
         [], {"overdue": [], "soon": [], "no_deadline_to_start": [], "no_deadline_in_process_count": 0},
         {"blank": [], "unrecognized": []},
-        {"to_start": 1, "in_process": 1, "on_hold": 0, "retired_this_run": 0},
+        [],
+        {"to_start": 1, "in_process": 1, "on_hold": 0, "retired_this_run": 0, "tracked_jobs": 1},
         warning_days=7,
     )
 

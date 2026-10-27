@@ -1,6 +1,9 @@
+from datetime import date
 from unittest.mock import patch
 
 from agents.oca.main import collapse_duplicate_sheet_rows, _sync_all
+from agents.oca.checks import check_deadline_to_start, find_duplicate_sheet_rows
+from agents.oca.checklist import build_checklist
 
 
 def _job(client_name="Caroline Day", sheet_tab="to_start", primary_job_type="Landscaping",
@@ -164,3 +167,48 @@ def test_two_consecutive_syncs_with_duplicate_pair_are_idempotent():
     assert mock_alert.call_count == 0
     # Confirms the DB ends up holding the winning (last) row's value both times.
     assert fake_db[("Caroline Day", "to_start", "Landscaping")]["deadline_to_start"] == "8/13/2026"
+
+
+# ── Checks/checklist keep every raw row; the DB tracks one row per key ──
+
+def test_joann_lynch_pair_shown_twice_in_checklist_but_once_in_db():
+    today = date(2026, 10, 27)
+    sheet_jobs = [
+        _job(client_name="Joann Lynch", primary_job_type="Landscaping",
+             deadline_to_start="10/20/2026", pm_name="Gustavo"),  # overdue (7 days ago)
+        _job(client_name="Joann Lynch", primary_job_type="Landscaping",
+             deadline_to_start="10/30/2026", pm_name="Gustavo"),  # soon (in 3 days)
+    ]
+
+    # Checks keep reading every raw row: both rows show up, one overdue, one soon.
+    deadline_result = check_deadline_to_start(sheet_jobs, today, warning_days=7)
+    assert len(deadline_result["overdue"]) == 1
+    assert len(deadline_result["soon"]) == 1
+    assert deadline_result["overdue"][0]["client_name"] == "Joann Lynch"
+    assert deadline_result["soon"][0]["client_name"] == "Joann Lynch"
+
+    # Duplicate detection finds exactly one group, with both rows.
+    duplicate_groups = find_duplicate_sheet_rows(sheet_jobs)
+    assert len(duplicate_groups) == 1
+    assert duplicate_groups[0]["key"] == ("Joann Lynch", "to_start", "Landscaping")
+    assert duplicate_groups[0]["rows"] == sheet_jobs
+
+    checklist = build_checklist(
+        [], deadline_result, {"blank": [], "unrecognized": []}, duplicate_groups,
+        {"to_start": 1, "in_process": 0, "on_hold": 0, "retired_this_run": 0, "tracked_jobs": 1},
+        warning_days=7,
+    )
+    # One entry in the new "Duplicate sheet rows" section, plus the two
+    # separate appearances in overdue/soon: three mentions in total.
+    assert checklist["section_counts"]["duplicate_sheet_rows"] == 1
+    assert checklist["slack_text"].count("Joann Lynch") == 3
+
+    # The DB sync path collapses the pair to a single row for that key.
+    with patch("db.state_store.get_all_active_jobs", return_value=[]), \
+         patch("agents.oca.main.send_deadline_change_alert"), \
+         patch("agents.oca.main.upsert_active_job") as mock_upsert, \
+         patch("agents.oca.main.set_config"):
+        _sync_all(sheet_jobs)
+
+    assert mock_upsert.call_count == 1
+    assert mock_upsert.call_args[0][0]["deadline_to_start"] == "10/30/2026"

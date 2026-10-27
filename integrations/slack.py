@@ -81,7 +81,7 @@ def _post_message(client: WebClient, channel: str, text: str, label: str) -> boo
             if error == "ratelimited" and attempt < _MAX_ATTEMPTS:
                 delay = _retry_after_seconds(e)
                 logger.warning(
-                    f"Slack ratelimited posting to {label} — retrying in {delay:.1f}s "
+                    f"Slack ratelimited posting to {label}, retrying in {delay:.1f}s "
                     f"(attempt {attempt}/{_MAX_ATTEMPTS})"
                 )
                 time.sleep(delay)
@@ -105,7 +105,7 @@ def _open_dm_channel(client: WebClient, user_id: str) -> "tuple[str | None, str 
             if error == "ratelimited" and attempt < _MAX_ATTEMPTS:
                 delay = _retry_after_seconds(e)
                 logger.warning(
-                    f"Slack ratelimited opening DM with {user_id} — retrying in {delay:.1f}s "
+                    f"Slack ratelimited opening DM with {user_id}, retrying in {delay:.1f}s "
                     f"(attempt {attempt}/{_MAX_ATTEMPTS})"
                 )
                 time.sleep(delay)
@@ -178,7 +178,7 @@ def send_dm(user_id: str, text: str, pm_name: str = "") -> bool:
     if not channel_id:
         if error and "user_not_found" in error:
             name = pm_name or user_id
-            logger.warning(f"DM failed for {name} (user_not_found) — skipping")
+            logger.warning(f"DM failed for {name} (user_not_found), skipping")
         else:
             logger.error(f"Slack error opening DM to {user_id}: {error}")
         return False
