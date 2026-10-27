@@ -1,0 +1,45 @@
+{
+  "id": "1000000000000101",
+  "threadId": "1000000000000100",
+  "labelIds": ["INBOX", "CATEGORY_PERSONAL"],
+  "snippet": "Thanks for the update! My concern about the electrical work...",
+  "sizeEstimate": 12345,
+  "historyId": "999999",
+  "internalDate": "1793200000000",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      {"name": "MIME-Version", "value": "1.0"},
+      {"name": "References", "value": "<ref-0001@mail.gmail.com>"},
+      {"name": "In-Reply-To", "value": "<reply-0001@mail.gmail.com>"},
+      {"name": "From", "value": "Customer Jobowner <customer.one@example.com>"},
+      {"name": "Date", "value": "Tue, 27 Oct 2026 15:16:00 -0400"},
+      {"name": "Message-ID", "value": "<msg-0101@mail.gmail.com>"},
+      {"name": "Subject", "value": "Re: Proposed resolution"},
+      {"name": "To", "value": "pm.one@bluecollarscholars.net"},
+      {"name": "Cc", "value": "ana.maria@bluecollarscholars.net"},
+      {"name": "Content-Type", "value": "multipart/alternative; boundary=\"000000000000aaaa11\""}
+    ],
+    "body": {"size": 0},
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "headers": [
+          {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "quoted-printable"}
+        ],
+        "body": {"size": 400, "data": "VGhhbmtzIGZvciB0aGUgdXBkYXRlISBNeSBjb25jZXJuIGFib3V0IHRoZSBwcm9qZWN0IHRpbWVsaW5lIGlzIHRoYXQgaXQgc2VlbXMgdG8gaGF2ZSBzbGlwcGVkIGFnYWluLg0KDQpUaGFua3MsCkNoYXJsaWU="}
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "headers": [
+          {"name": "Content-Type", "value": "text/html; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "quoted-printable"}
+        ],
+        "body": {"size": 600, "data": "PGRpdj5UaGFua3MgZm9yIHRoZSB1cGRhdGUhIE15IGNvbmNlcm4gYWJvdXQgdGhlIHByb2plY3QgdGltZWxpbmUgaXMgdGhhdCBpdCBzZWVtcyB0byBoYXZlIHNsaXBwZWQgYWdhaW4uPGJyPjxicj5UaGFua3MsPGJyPkNoYXJsaWU8L2Rpdj4="}
+      }
+    ]
+  }
+}

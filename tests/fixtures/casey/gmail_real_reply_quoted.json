@@ -1,0 +1,25 @@
+{
+  "id": "1000000000000105",
+  "threadId": "1000000000000100",
+  "labelIds": ["INBOX"],
+  "snippet": "Sounds good, thank you!",
+  "sizeEstimate": 5000,
+  "historyId": "999995",
+  "internalDate": "1793160000000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      {"name": "From", "value": "Customer Jobowner <customer.one@example.com>"},
+      {"name": "Date", "value": "Wed, 21 Oct 2026 09:05:00 -0400"},
+      {"name": "Subject", "value": "Re: Schedule confirmation"},
+      {"name": "To", "value": "pm.two@bluecollarscholars.net"},
+      {"name": "References", "value": "<ref-9999@mail.gmail.com>"},
+      {"name": "In-Reply-To", "value": "<reply-9999@mail.gmail.com>"},
+      {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""}
+    ],
+    "body": {
+      "size": 350,
+      "data": "U291bmRzIGdvb2QsIHRoYW5rIHlvdSENCg0KT24gV2VkLCBPY3QgMjEsIDIwMjYgYXQgOTowMOKAr0FNIFBNIFR3byA8cG0udHdvQGJsdWVjb2xsYXJzY2hvbGFycy5uZXQ-DQp3cm90ZToNCg0KPiBIaSwganVzdCBjb25maXJtaW5nIHRoZSBzY2hlZHVsZSBmb3IgbmV4dCB3ZWVrLg=="
+    }
+  }
+}

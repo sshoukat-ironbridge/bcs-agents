@@ -1,0 +1,22 @@
+{
+  "id": "1000000000000104",
+  "threadId": "1000000000000104",
+  "labelIds": ["INBOX", "CATEGORY_UPDATES"],
+  "snippet": "You now have access to the Example Project",
+  "sizeEstimate": 3000,
+  "historyId": "999996",
+  "internalDate": "1793170000000",
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      {"name": "From", "value": "Blue Collar Scholars <notifications@buildertrend.net>"},
+      {"name": "Date", "value": "Mon, 26 Oct 2026 08:00:00 -0400"},
+      {"name": "Subject", "value": "You now have access to the Example Project"},
+      {"name": "To", "value": "customer.one@example.com"},
+      {"name": "Precedence", "value": "bulk"},
+      {"name": "List-Unsubscribe", "value": "<mailto:unsub@buildertrend.net>"},
+      {"name": "Content-Type", "value": "text/html; charset=\"UTF-8\""}
+    ],
+    "body": {"size": 400, "data": "PGRpdj5Zb3Ugbm93IGhhdmUgYWNjZXNzLjwvZGl2Pg=="}
+  }
+}

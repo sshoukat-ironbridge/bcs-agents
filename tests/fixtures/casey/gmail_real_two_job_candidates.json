@@ -1,0 +1,23 @@
+{
+  "id": "1000000000000107",
+  "threadId": "1000000000000107",
+  "labelIds": ["INBOX"],
+  "snippet": "Checking in on the project status, any updates?",
+  "sizeEstimate": 1800,
+  "historyId": "999993",
+  "internalDate": "1793140000000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      {"name": "From", "value": "Shared Household <shared.household@example.com>"},
+      {"name": "Date", "value": "Sat, 24 Oct 2026 11:00:00 -0400"},
+      {"name": "Subject", "value": "Checking in"},
+      {"name": "To", "value": "pm.one@bluecollarscholars.net"},
+      {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""}
+    ],
+    "body": {
+      "size": 100,
+      "data": "Q2hlY2tpbmcgaW4gb24gdGhlIHByb2plY3Qgc3RhdHVzLCBhbnkgdXBkYXRlcz8="
+    }
+  }
+}

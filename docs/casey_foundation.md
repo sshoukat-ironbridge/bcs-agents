@@ -588,3 +588,34 @@ level. Revisit if a Workspace admin ever authorizes `gmail.readonly`
 for this client ID. Verified live against the real
 `chris.s@bluecollarscholars.net` mailbox: `list_messages()` and
 `get_message()` both work and return real headers/`internalDate`.
+
+**Real-data bug caught before Step 3 was written**: Gmail's actual "On
+... wrote:" quote attribution line wraps, with `wrote:` landing on its
+own line (confirmed against a real reply:
+`"On Tue, Oct 27, 2026 at 3:16 PM Tatiana BCS <...>\nwrote:\n"`) — a
+single-line `^On .+ wrote:$` regex never matches real mail.
+`agents/casey/normalizers.py::_strip_quoted_and_signature()` now looks
+ahead up to 3 lines for `wrote:` once a line starts with `"On "`.
+
+**`agents/casey/ingest_gmail.py` (Step 3)**: `run(since, dry_run=...)`,
+one cursor per mailbox (`ingest_cursors`, source `gmail:<mailbox>`,
+`casey_gmail_overlap_hours` default 2). Query is
+`after:<epoch_s> before:<epoch_s> -in:spam -in:trash`. Customer address:
+inbound = sender; outbound = the first To/Cc address that's a known
+customer email. Automated messages (existing `is_automated_email()`
+rules) are counted but never stored. A customer address matching
+exactly one job gets `job_id`/`job_key`; matching 2+ jobs gets
+`job_id: null` with every candidate key folded into `raw_ref` as
+`candidate_job_keys`, and is still **stored** (counted `ambiguous`) —
+only an address matching **zero** jobs is "unmatched" and governed by
+`casey_gmail_store_unmatched` (default false, counted either way).
+Idempotent via the same `upsert_customer_message()` used for Dialpad.
+
+**Step 5 fixtures** (`tests/fixtures/casey/gmail_real_*.json`): built
+from real confirmed Gmail API shapes (top-level
+`id/threadId/labelIds/snippet/payload/sizeEstimate/historyId/
+internalDate`; `payload.parts` for multipart), covering
+multipart/alternative, HTML-only, a forwarded thread, an automated
+vendor sender, a quoted reply, an outbound BCS-address message, and a
+message whose From address matches two active jobs (ambiguous). 15 new
+ingestion tests + 20 normalizer tests, 265 total passing.

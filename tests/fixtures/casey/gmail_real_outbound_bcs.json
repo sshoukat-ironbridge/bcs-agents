@@ -1,0 +1,23 @@
+{
+  "id": "1000000000000106",
+  "threadId": "1000000000000106",
+  "labelIds": ["SENT"],
+  "snippet": "Hi Jane, Just confirming the crew will be out Monday.",
+  "sizeEstimate": 2500,
+  "historyId": "999994",
+  "internalDate": "1793150000000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      {"name": "From", "value": "PM One <pm.one@bluecollarscholars.net>"},
+      {"name": "Date", "value": "Sun, 25 Oct 2026 14:00:00 -0400"},
+      {"name": "Subject", "value": "Crew confirmation"},
+      {"name": "To", "value": "customer.two@example.com"},
+      {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""}
+    ],
+    "body": {
+      "size": 200,
+      "data": "SGkgSmFuZSwNCg0KSnVzdCBjb25maXJtaW5nIHRoZSBjcmV3IHdpbGwgYmUgb3V0IE1vbmRheS4NCg0KQmVzdCwNClBNIE9uZQ=="
+    }
+  }
+}

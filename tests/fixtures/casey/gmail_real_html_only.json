@@ -1,0 +1,23 @@
+{
+  "id": "1000000000000102",
+  "threadId": "1000000000000102",
+  "labelIds": ["INBOX"],
+  "snippet": "You now have access to the project...",
+  "sizeEstimate": 4000,
+  "historyId": "999998",
+  "internalDate": "1793190000000",
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      {"name": "From", "value": "Vendor Notifications <notifications@vendor-example.net>"},
+      {"name": "Date", "value": "Tue, 27 Oct 2026 10:00:00 -0400"},
+      {"name": "Subject", "value": "You now have access to the Example Project"},
+      {"name": "To", "value": "chris.s@bluecollarscholars.net"},
+      {"name": "Content-Type", "value": "text/html; charset=\"UTF-8\""}
+    ],
+    "body": {
+      "size": 500,
+      "data": "PGRpdj5Zb3Ugbm93IGhhdmUgYWNjZXNzIHRvIHRoZSBwcm9qZWN0LiA8YSBocmVmPSJodHRwczovL2V4YW1wbGUuY29tIj5WaWV3IGl0IGhlcmU8L2E-LjwvZGl2Pg=="
+    }
+  }
+}
