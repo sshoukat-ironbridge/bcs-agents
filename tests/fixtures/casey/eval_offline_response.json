@@ -1,0 +1,27 @@
+{
+  "model": "offline-fixture",
+  "id": "msg_offline_fixture_0001",
+  "usage": {"input_tokens": 500, "output_tokens": 150},
+  "content": [
+    {
+      "type": "tool_use",
+      "name": "submit_analysis",
+      "input": {
+        "sentiment": "neutral",
+        "sentiment_score": 0.0,
+        "is_strong_praise": false,
+        "red_flag_suggested": false,
+        "severity": null,
+        "primary_reason": "Other (explain in Notes)",
+        "additional_reasons": [],
+        "reason_notes": "Offline fixture response - not a real model call.",
+        "root_cause": "Undetermined (default)",
+        "issue_summary": "Offline fixture: no real analysis performed.",
+        "evidence_quote": "",
+        "same_complaint_as_open_flag": false,
+        "trajectory": "unknown",
+        "confidence": 0.0
+      }
+    }
+  ]
+}

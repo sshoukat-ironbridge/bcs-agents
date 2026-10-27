@@ -814,3 +814,30 @@ analyzed.
 New `message_analyses` columns (migration verified on the local DB):
 `suggested_primary_reason`, `reason_notes`, `same_complaint_as_open_flag`,
 `trajectory`, `confidence`, `status` (`ok`|`failed`, default `ok`).
+
+### `scripts/casey_eval.py` (Step 3)
+
+Evaluation harness over the Stage 6 calibration golden set. Makes **no
+database writes**. Groups cases by customer, sorts each customer's
+cases chronologically (a missing date — the Sandstrom pre-cancellation
+summary — sorts first, since it describes what came *before* the Oct
+20 message), and feeds each customer's own prior results forward as
+`history` for their later messages, so Julie Harrison's Sep 16/Sep
+26/Oct 9 examples and Danielle Ewen's Oct 1/5/19 examples build on each
+other exactly as a live run would. Prints a table (customer, date,
+expected, got, pass/fail, confidence), the pass count, token usage, and
+an estimated cost (Sonnet 5.5's current per-token price — $2/$10 per
+1M — hardcoded as a documented snapshot, not fetched live).
+
+Pass rules: the two "Low or Neutral boundary" examples pass on
+`None`/no-flag or `Low`; Caroline Day passes on `Medium` or `High`;
+every other example must match the expected severity exactly.
+
+`--offline` uses one recorded response fixture
+(`tests/fixtures/casey/eval_offline_response.json`) instead of a real
+API call, so the harness (and its tests) run without network access —
+its purpose is exercising the plumbing end-to-end, not a meaningful
+pass rate (the fixture always returns the same neutral/no-flag
+output). A real run (no `--offline`) requires `ANTHROPIC_API_KEY` to be
+set; without it, `run_eval()` raises immediately rather than silently
+running offline.
