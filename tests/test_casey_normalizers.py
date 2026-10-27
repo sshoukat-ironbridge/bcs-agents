@@ -129,6 +129,17 @@ def test_extract_body_strips_quoted_reply():
     assert "original message text" not in result
 
 
+def test_extract_body_strips_quoted_reply_when_wrote_wraps_to_its_own_line():
+    # Live-checked against a real Gmail reply: the attribution line often
+    # wraps so "wrote:" lands on its own line, not at the end of "On ...".
+    text = ("Thanks!\n\nLaura\n\n\nOn Tue, Oct 27, 2026 at 3:16 PM Tatiana BCS "
+            "<tatiana@bluecollarscholars.net>\nwrote:\n\n> Hi Laura,\n> original quoted text")
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    result = extract_gmail_body_text(payload)
+    assert result == "Thanks!\n\nLaura"
+    assert "original quoted text" not in result
+
+
 def test_extract_body_strips_original_message_marker():
     text = "My reply here.\n-----Original Message-----\nFrom: someone"
     payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}

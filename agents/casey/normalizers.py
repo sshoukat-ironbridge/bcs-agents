@@ -24,13 +24,18 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 # A line matching any of these ends the kept body — everything from here
 # down is a quoted reply or a signature, not part of this message.
+# Stop patterns matched against a single line. "On ... wrote:" is handled
+# separately below — LIVE-CHECKED against a real Gmail reply: the
+# attribution line routinely wraps, with "wrote:" landing on its OWN
+# line ("On Tue, Oct 27, 2026 at 3:16 PM Tatiana BCS <...>\nwrote:\n"),
+# so a single-line "^On .+ wrote:$" regex never matches real mail.
 _QUOTE_OR_SIGNATURE_STOP_PATTERNS = [
     re.compile(r"^>"),
-    re.compile(r"^On .+ wrote:\s*$", re.I),
     re.compile(r"^-{2,}\s*Original Message\s*-{0,}", re.I),
     re.compile(r"^-- ?$"),
     re.compile(r"^Sent from my (iPhone|iPad|Android|mobile device)\b", re.I),
 ]
+_ON_WROTE_LOOKAHEAD_LINES = 3
 
 
 def _parse_address_list(header_value: str) -> list[str]:
@@ -41,12 +46,17 @@ def _parse_address_list(header_value: str) -> list[str]:
 
 
 def _strip_quoted_and_signature(text: str) -> str:
-    kept = []
-    for line in text.splitlines():
-        if any(p.match(line.strip()) for p in _QUOTE_OR_SIGNATURE_STOP_PATTERNS):
-            break
-        kept.append(line)
-    return "\n".join(kept).strip()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if any(p.match(stripped) for p in _QUOTE_OR_SIGNATURE_STOP_PATTERNS):
+            return "\n".join(lines[:i]).strip()
+        # "On <date/sender>... wrote:" — may wrap onto the next line(s)
+        # before "wrote:" itself, so look ahead rather than matching one
+        # line in isolation.
+        if stripped.startswith("On ") and "wrote:" in " ".join(lines[i:i + _ON_WROTE_LOOKAHEAD_LINES]).lower():
+            return "\n".join(lines[:i]).strip()
+    return "\n".join(lines).strip()
 
 
 class _HTMLTextExtractor(HTMLParser):
