@@ -495,6 +495,19 @@ def init_db() -> None:
                 # Dialpad integration
                 "dialpad_api_key":           "",
                 "dialpad_api_base_url":      "https://dialpad.com/api/v2",
+                # Casey notification recipients (agents/casey/notification_plan.py).
+                # Empty by default — never hardcode a real address here.
+                "casey_email_ana_maria":     "",
+                "casey_email_tatiana":       "",
+                "casey_email_chris":         "",
+                # When set, replaces every Casey email recipient (local testing).
+                "casey_email_override":      "",
+                # Dialpad webhook signature verification (agents/casey, Step 9).
+                "dialpad_webhook_secret":    "",
+                # 24-consecutive-hour response window (agents/casey/response_watch.py).
+                "casey_response_window_hours": "24",
+                # SMS replies count as an answered customer email by default: off.
+                "casey_sms_counts_as_response": "false",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(

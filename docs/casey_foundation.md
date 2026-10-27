@@ -127,6 +127,41 @@ DB and the existing local DB): `customer_messages`, `message_analyses`,
   single-column ID that survives a client's job being re-keyed.
 - Casey only reads `casey_active_jobs`; no column on it is owned by Casey
   except `address` (Step 7a, Part 1).
+- New `app_config` defaults (all empty/off by default): `casey_email_ana_maria`,
+  `casey_email_tatiana`, `casey_email_chris`, `casey_email_override`,
+  `dialpad_webhook_secret`, `casey_response_window_hours` ("24"),
+  `casey_sms_counts_as_response` ("false").
+
+### Pure logic modules (Step 8)
+
+All under `agents/casey/`, no network/DB access, full unit test coverage:
+
+- **`access.py`**: `visible_projects(role, linked_name, projects)` — admin/
+  leadership/cx_coordinator see everything; pm/estimator see only projects
+  where `pm_name`/`estimator_name` matches `linked_name`; any other role
+  fails closed (sees nothing).
+- **`flag_logic.py`**: `decide_action(existing_open_flags, candidate)` →
+  one of `create | escalate | note_improvement | no_op | create_separate`.
+  Same complaint = same `job_key` + same `primary_reason` (configurable via
+  `same_complaint_by`). Escalates only on a severity *increase*; improving
+  sentiment is noted but never auto-closes or auto-lowers a flag (humans
+  only, with an audit event elsewhere).
+- **`notification_plan.py`**: `plan_notifications(flag, action, ...)` plans
+  (never sends) a Slack channel post + PM DM for every plannable action,
+  plus emails per `DEFAULT_EMAIL_MATRIX` (Low: PM+Ana Maria; Medium: +
+  Tatiana; High/Critical: + Chris — **doc ambiguity**: the doc's prose says
+  Tatiana joins at High, its table says Medium; defaulted to the table,
+  overridable via the `email_matrix` param). `casey_email_override`
+  replaces every email recipient when set. `dedup_key` = `flag_id:severity`
+  so an unchanged flag never re-alerts and an escalation always gets a
+  fresh notification.
+- **`response_watch.py`**: `classify_response(inbound, candidates, now, ...)`
+  → `waiting | responded | overdue | excluded`. A response is an outbound
+  email in the same thread, or a *connected* (duration > 0) outbound call
+  with that customer, within `casey_response_window_hours` (default 24)
+  consecutive calendar hours of `received_at`. SMS counts only when
+  `casey_sms_counts_as_response` is true (default false). Automated inbound
+  mail is excluded outright.
 
 ### Taxonomy (Step 6)
 
