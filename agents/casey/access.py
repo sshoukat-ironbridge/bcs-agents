@@ -8,6 +8,10 @@ cx_coordinator, pm, estimator.
 FULL_VISIBILITY_ROLES = {"admin", "leadership", "cx_coordinator"}
 RESTRICTED_ROLES = {"pm", "estimator"}
 
+# The safe default for any UI/script that creates a new dashboard user and
+# doesn't otherwise decide a role: least privileged, not full access.
+DEFAULT_NEW_USER_ROLE = "pm"
+
 # Maps a restricted role to the project field it's matched against.
 _LINKED_FIELD_BY_ROLE = {
     "pm": "pm_name",

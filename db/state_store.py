@@ -121,7 +121,7 @@ if _db_available:
         # Role-based visibility (agents/casey/access.py). Existing rows default
         # to 'admin' via the ALTER TABLE default below, so every account that
         # could already log in keeps full access unchanged.
-        role          = Column(String, nullable=False, default="admin")
+        role          = Column(String, nullable=False, default="pm")  # safety net only; create_user() always passes one
         linked_name   = Column(String, nullable=True)  # PM/estimator display name, for role in (pm, estimator)
         created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         updated_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -453,10 +453,17 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE pm_config ADD COLUMN IF NOT EXISTS dialpad_user_id TEXT"))
             conn.commit()
 
-            # Casey foundations: role-based dashboard access. Existing accounts
-            # default to 'admin' so every login that already worked keeps
-            # working with full access, unchanged.
-            conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'"))
+            # Casey foundations: role-based dashboard access. Existing
+            # accounts are backfilled to 'admin' ONCE (a row that already
+            # existed before this migration keeps full access, unchanged).
+            # Going forward the column default is 'pm' (least privileged) —
+            # create_user() below still always requires an explicit role;
+            # this default is only a safety net for a raw insert that
+            # forgets the column.
+            conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS role TEXT"))
+            conn.execute(text("UPDATE dashboard_users SET role = 'admin' WHERE role IS NULL"))
+            conn.execute(text("ALTER TABLE dashboard_users ALTER COLUMN role SET DEFAULT 'pm'"))
+            conn.execute(text("ALTER TABLE dashboard_users ALTER COLUMN role SET NOT NULL"))
             conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS linked_name TEXT"))
             conn.commit()
 
@@ -508,6 +515,8 @@ def init_db() -> None:
                 "casey_response_window_hours": "24",
                 # SMS replies count as an answered customer email by default: off.
                 "casey_sms_counts_as_response": "false",
+                # Per-IP rate limit for unauthenticated webhook endpoints.
+                "casey_webhook_rate_limit_per_minute": "30",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -867,7 +876,7 @@ def get_user_by_email(email: str) -> "dict | None":
             if not r:
                 return None
             return {"id": r.id, "email": r.email, "password_hash": r.password_hash,
-                     "role": r.role or "admin", "linked_name": r.linked_name}
+                     "role": r.role or "pm", "linked_name": r.linked_name}
     except Exception as e:
         logger.error(f"get_user_by_email: {e}")
         return None
@@ -882,9 +891,39 @@ def get_user_by_id(user_id: int) -> "dict | None":
             if not r:
                 return None
             return {"id": r.id, "email": r.email, "password_hash": r.password_hash,
-                     "role": r.role or "admin", "linked_name": r.linked_name}
+                     "role": r.role or "pm", "linked_name": r.linked_name}
     except Exception as e:
         logger.error(f"get_user_by_id: {e}")
+        return None
+
+
+def create_user(email: str, password_hash: str, role: str, linked_name: str = "") -> "dict | None":
+    """Creates a new dashboard user. role is REQUIRED — there is no
+    implicit default here, by design (see docs/casey_foundation.md):
+    agents.casey.access.DEFAULT_NEW_USER_ROLE ("pm", least privileged) is
+    the safe value any future creation form should pre-fill, but the
+    caller always decides and passes it explicitly. Raises ValueError for
+    an unrecognized role."""
+    from agents.casey.access import FULL_VISIBILITY_ROLES, RESTRICTED_ROLES
+    valid_roles = FULL_VISIBILITY_ROLES | RESTRICTED_ROLES
+    if role not in valid_roles:
+        raise ValueError(f"role {role!r} is not one of {sorted(valid_roles)}")
+
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            user = DashboardUser(
+                email=email.strip().lower(),
+                password_hash=password_hash,
+                role=role,
+                linked_name=linked_name or None,
+            )
+            s.add(user)
+            s.commit()
+            return {"id": user.id, "email": user.email, "role": user.role, "linked_name": user.linked_name}
+    except Exception as e:
+        logger.error(f"create_user({email}): {e}")
         return None
 
 

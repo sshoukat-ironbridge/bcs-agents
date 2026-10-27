@@ -5,6 +5,11 @@ no pushes, no production DB, no live Slack/email sends, `silent_mode` stays
 `"true"` throughout. All new datetimes are timezone-aware UTC; display goes
 through `utils/timeutil.py` (America/New_York).
 
+> **`casey_active_jobs` is the shared jobs table**: OCA writes it (sheet
+> sync, retire/reconcile), Casey reads it read-only. The table/model name
+> is a historical leftover from before this rebuild — it is **not**
+> renamed, to avoid an unnecessary migration across every OCA write path.
+
 ## Part 1: DB cleanup
 
 ### Audit (Step 1)
@@ -332,3 +337,35 @@ never send), `response_watch.py` (24h window classification),
 - **Ambiguous contacts** (8 emails, 7 phones shared by more than one job
   locally) will never auto-match once ingestion is built — needs a human
   process (or sheet data cleanup) for those specific clients.
+
+## Part 3: Stage 5 — Dialpad call ingestion (read only)
+
+### Review fixes (Step 0)
+
+- **`dashboard_users.role` default was backwards**: the column defaulted
+  new rows to `'admin'`, which only made sense for the one-time backfill
+  of accounts that existed before roles existed. Fixed: existing rows are
+  backfilled to `'admin'` once (`UPDATE ... WHERE role IS NULL`), then the
+  column default changes to `'pm'` (least privileged) going forward.
+  `db/state_store.py::create_user()` is new and **requires an explicit
+  role** (no default parameter) — `agents/casey/access.py::
+  DEFAULT_NEW_USER_ROLE` (`"pm"`) is what any future creation form should
+  pre-select, not something the function assumes on its own. Verified live:
+  the existing `admin@gmail.com` row kept `role=admin` after migration, the
+  column's `DEFAULT` is now `'pm'`, and `create_user(..., role="pm")`
+  stores correctly.
+- **Webhook receiver no longer stores anything for an unverified
+  signature**: `webhook_events` gets a row ONLY when the JWT verifies.
+  An invalid/unsigned/unconfigured-secret request is never persisted —
+  only a `WARNING` log line (IP, body size, running per-IP count) and an
+  in-memory counter. Added a per-IP sliding-window rate limiter
+  (`SlidingWindowRateLimiter`, `casey_webhook_rate_limit_per_minute`,
+  default `"30"`), returning `429` over the limit.
+- **DB vs. sheet row-count check**: active `casey_active_jobs` rows per
+  tab vs. distinct `(client_name, sheet_tab, primary_job_type)` keys in
+  the current sheet pull matched exactly (`in_process: 71=71`,
+  `to_start: 105=105`) — no divergence to explain. (The raw sheet fetch
+  returned 179 rows; 176 distinct keys is 3 duplicates, matching OCA's
+  existing "Duplicate sheet rows" checklist section.)
+- **Note added** at the top of this doc: `casey_active_jobs` is the
+  shared table (OCA writes, Casey reads), not renamed.
