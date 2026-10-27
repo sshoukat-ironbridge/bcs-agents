@@ -753,3 +753,22 @@ rows (no watch is currently overdue to trigger one; the schema and
 suppression logic are verified by unit tests and the migration is
 confirmed live — `casey_notifications.reason` column exists on the
 local DB).
+
+## Part B: Analysis engine
+
+### `integrations/anthropic_client.py` (Step 1) — forced tool use is not available
+
+The task asked for forced tool use (`tool_choice` pinned to one tool) so
+the output is structured. **Checked directly against Anthropic's own
+current API documentation**: forced `tool_choice` (`type: "tool"` or
+`"any"`) returns a 400 on every current-generation model, **including
+`claude-sonnet-5-5`** (`casey_model`'s default). The documented
+workaround — used here — is `tool_choice: {"type": "auto"}` plus
+`strict: true` on the tool (requiring `additionalProperties: false` in
+`input_schema`, which keeps the same schema-valid-output guarantee)
+plus an explicit system-prompt instruction to always call the tool.
+Also set `output_config: {"effort": "low"}`: this is a single-message
+classification-shaped task, which is the documented case for low
+effort (cheaper, and this model's thinking can't be disabled entirely).
+Config: `casey_model` (default `claude-sonnet-5-5`), `casey_max_tokens`
+(default `1024`), `casey_analysis_enabled` (default `false`).

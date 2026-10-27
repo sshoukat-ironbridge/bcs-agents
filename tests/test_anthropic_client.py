@@ -61,8 +61,11 @@ def test_request_sends_correct_headers_and_tool_choice():
     assert captured["url"] == "https://api.anthropic.com/v1/messages"
     assert captured["headers"]["x-api-key"] == "fake-key"
     assert captured["headers"]["anthropic-version"] == "2023-06-01"
-    assert captured["json"]["tool_choice"] == {"type": "tool", "name": "my_tool"}
+    # tool_choice is "auto", not forced - forced tool_choice 400s on
+    # current-generation models including the default casey_model.
+    assert captured["json"]["tool_choice"] == {"type": "auto"}
     assert captured["json"]["tools"][0]["name"] == "my_tool"
+    assert captured["json"]["tools"][0]["strict"] is True
     assert captured["json"]["model"] == "my-model"
     assert captured["json"]["max_tokens"] == 500
 

@@ -49,11 +49,21 @@ def call_with_tool(
     input_schema: dict[str, Any],
     _sleep=time.sleep,
 ) -> dict[str, Any]:
-    """POSTs to /v1/messages with tool_choice pinned to `tool_name`, so
-    Anthropic returns exactly one tool_use block shaped by input_schema.
-    Returns the full parsed response JSON (use extract_tool_input() to
-    pull the structured output out of it). Retries 429/5xx up to
-    MAX_ATTEMPTS with backoff; any other error fails immediately."""
+    """POSTs to /v1/messages so Anthropic returns one tool_use block shaped
+    by input_schema. Returns the full parsed response JSON (use
+    extract_tool_input() to pull the structured output out of it).
+    Retries 429/5xx up to MAX_ATTEMPTS with backoff; any other error
+    fails immediately.
+
+    tool_choice is "auto", not forced to this tool: forced tool_choice
+    (type "tool"/"any") returns a 400 on current-generation models,
+    including the default casey_model (claude-sonnet-5-5) — confirmed
+    against Anthropic's own current API docs, not assumed. The caller's
+    system prompt must explicitly instruct the model to always respond
+    by calling `tool_name`; `strict: true` on the tool (requiring
+    `additionalProperties: false` in input_schema) keeps the structured-
+    output guarantee the forced form would have given. See
+    docs/casey_foundation.md for this correction."""
     api_key = _api_key()
     if not api_key:
         raise AnthropicClientError("ANTHROPIC_API_KEY is not set")
@@ -68,8 +78,12 @@ def call_with_tool(
         "max_tokens": max_tokens,
         "system": system,
         "messages": messages,
-        "tools": [{"name": tool_name, "description": tool_description, "input_schema": input_schema}],
-        "tool_choice": {"type": "tool", "name": tool_name},
+        "tools": [{"name": tool_name, "description": tool_description, "input_schema": input_schema, "strict": True}],
+        "tool_choice": {"type": "auto"},
+        # Classification-shaped task over a single customer message: low
+        # effort is the documented recommendation for this workload shape
+        # and keeps reasoning-token cost down.
+        "output_config": {"effort": "low"},
     }
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
