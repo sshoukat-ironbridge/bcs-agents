@@ -174,9 +174,13 @@ def normalize_dialpad_sms(payload: dict) -> dict:
 # --- Job matching: customer email first, then phone -------------------------
 
 def _normalize_phone(phone: str) -> str:
-    """Strips everything but digits and keeps the string comparable
-    regardless of dashes/spaces/parens formatting differences."""
-    return "".join(c for c in (phone or "") if c.isdigit())
+    """Strips everything but digits, then keeps only the last 10 — so
+    formatting differences (dashes/spaces/parens) AND a leading country
+    code ("+1") don't cause two representations of the same US number to
+    miss each other. A string with fewer than 10 digits is returned as-is
+    (nothing to truncate)."""
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
 
 
 def build_contact_index(jobs: list[dict]) -> dict:

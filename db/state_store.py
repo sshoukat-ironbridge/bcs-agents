@@ -526,6 +526,18 @@ def init_db() -> None:
                 "casey_sms_counts_as_response": "false",
                 # Per-IP rate limit for unauthenticated webhook endpoints.
                 "casey_webhook_rate_limit_per_minute": "30",
+                # Dialpad call ingestion (agents/casey/ingest_dialpad.py).
+                # Off by default - a scheduled run checks this; an explicit
+                # CLI invocation (including --dry-run) always proceeds.
+                "casey_dialpad_enabled": "false",
+                # Transcripts are typically ready within ~46 minutes; wait
+                # 60 before fetching so most calls aren't re-fetched empty.
+                "casey_dialpad_transcript_lag_minutes": "60",
+                # Re-fetch this much of the previous window on each run, so
+                # a call near the edge (or a transcript that wasn't ready
+                # yet) is never missed - upsert on (source, external_id)
+                # makes the overlap idempotent.
+                "casey_dialpad_overlap_hours": "2",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -1375,4 +1387,73 @@ def reconcile_retired_jobs(sheet_keys: set) -> int:
     except Exception as e:
         logger.error(f"DB error in reconcile_retired_jobs: {e}")
     return retired_count
+
+
+# --- Ingestion cursors (agents/casey/ingest_windows.py callers) ------------
+
+def get_ingest_cursor(source: str) -> "str | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            row = s.query(IngestCursor).filter_by(source=source).first()
+            return row.cursor_value if row else None
+    except Exception as e:
+        logger.error(f"get_ingest_cursor({source}): {e}")
+        return None
+
+
+def set_ingest_cursor(source: str, cursor_value: str) -> None:
+    if not _db_available:
+        return
+    try:
+        with _Session() as s:
+            row = s.query(IngestCursor).filter_by(source=source).first()
+            if row:
+                row.cursor_value = cursor_value
+                row.updated_at = datetime.now(timezone.utc)
+            else:
+                s.add(IngestCursor(source=source, cursor_value=cursor_value))
+            s.commit()
+    except Exception as e:
+        logger.error(f"set_ingest_cursor({source}): {e}")
+
+
+# --- customer_messages (Casey ingestion agents) -----------------------------
+
+_CUSTOMER_MESSAGE_FIELDS = {
+    "source", "external_id", "thread_id", "job_id", "job_key",
+    "customer_email", "customer_phone", "duration_ms", "call_state",
+    "direction", "occurred_at", "sender", "subject", "body_text",
+    "is_automated", "pm_name", "estimator_name", "raw_ref",
+}
+
+
+def upsert_customer_message(row: dict) -> bool:
+    """Upserts on (source, external_id) — the same call/email/SMS ingested
+    twice updates the existing row instead of duplicating it. Returns True
+    if a new row was inserted, False if an existing row was updated (or on
+    failure) — used by ingestion agents to report "N new rows" without
+    double-counting on a re-run."""
+    if not _db_available:
+        return False
+    clean = {k: v for k, v in row.items() if k in _CUSTOMER_MESSAGE_FIELDS}
+    try:
+        with _Session() as s:
+            existing = (
+                s.query(CustomerMessage)
+                .filter_by(source=clean["source"], external_id=clean["external_id"])
+                .first()
+            )
+            if existing:
+                for field, value in clean.items():
+                    setattr(existing, field, value)
+                s.commit()
+                return False
+            s.add(CustomerMessage(**clean))
+            s.commit()
+            return True
+    except Exception as e:
+        logger.error(f"upsert_customer_message({row.get('source')}, {row.get('external_id')}): {e}")
+        return False
 

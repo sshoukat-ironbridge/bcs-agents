@@ -153,6 +153,17 @@ def test_no_match_returns_empty():
     assert result == {"job_key": None, "candidates": [], "matched_by": None}
 
 
+def test_match_by_phone_ignores_leading_country_code():
+    jobs_with_country_code = [
+        {"client_name": "D", "sheet_tab": "to_start", "primary_job_type": "Fence",
+         "customer_email": "", "customer_phone": "555-777-8888"},
+    ]
+    index = build_contact_index(jobs_with_country_code)
+    result = match_job({"customer_phone": "+1 (555) 777-8888"}, index)
+    assert result["job_key"] == ("D", "to_start", "Fence")
+    assert result["matched_by"] == "phone"
+
+
 def test_count_ambiguous_contacts():
     result = count_ambiguous_contacts(JOBS)
     assert result["ambiguous_email_count"] == 1
