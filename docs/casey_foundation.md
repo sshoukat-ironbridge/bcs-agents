@@ -472,3 +472,63 @@ real phone line fielding plenty of calls unrelated to an active tracked
 job (sales calls, wrong numbers, calls about jobs not currently in
 `casey_active_jobs`) rather than a matching bug — `match_job()`'s own
 unit tests confirm the matching logic itself is correct.
+
+## Stage 6
+
+### Part A: Dialpad match-rate diagnosis
+
+**Sheet-side phone format** (174 active jobs' `customer_phone`): 159
+clean single numbers, 0 with an extension, 1 with two numbers in one
+cell (newline-separated, one marked `"(wrong)"` in the sheet itself — a
+data-quality oddity, not a representative pattern), 3 noise (one is
+literally a street address in the phone cell, two are placeholder text
+`"n/a"`/`"no phone"`), 11 empty.
+
+**Dialpad-side phone format** (295 stored unmatched calls): **100%
+uniform `+1##########`** (11 digits, `+1` prefix) — zero parsing
+anomalies on the Dialpad side either.
+
+**Unmatched call analysis** (295 rows, `job_id IS NULL`):
+- 49 distinct contact numbers (not 295 distinct customers — the same
+  small set of numbers repeats).
+- 31 of those 49 numbers appear in 2+ calls.
+- 13 numbers appear across 2+ different PMs — likely shared
+  vendor/subcontractor/supplier lines, not customer-specific numbers.
+- 0 of the 49 numbers appear as a substring in any active job's
+  `customer_email` or `client_name`.
+- No secondary phone field exists at all — `integrations/sheets.py`
+  only reads one `"phone number"` column — so "secondary phone" doesn't
+  apply.
+- 174 of 295 have a `Customer:` transcript line of 20+ words — real
+  conversations, not short/junk calls.
+
+**Per-PM** (`customer_messages.pm_name`, from `pm_config.full_name`):
+Andrea 39/14m, Antonio 32/4m, Carlos 18/6m, Daniel 61/5m, Esteban
+19/4m, Fernanda 98/1m, Gustavo 2/0m, Julie 9/1m, Laura 3/0m, Santiago
+49/0m (`total/matched`).
+
+**Secondary finding (not the root cause, but worth fixing eventually)**:
+`pm_config.full_name` (e.g. `"Santiago"`, `"Daniel"`) and
+`casey_active_jobs.pm_name` (sheet values, e.g. `"Santiago A"`,
+`"Santiago P"`, `"Daniel Gomez Cortez"`) use different naming
+conventions for the same person — there is no canonical PM-identity
+mapping between the two. This doesn't affect phone-based call matching
+(which never looks at PM name), but it does mean a "calls per PM" and a
+"jobs per PM" table can't be joined directly without that mapping — the
+per-PM job-coverage numbers above use the sheet's own `pm_name` values
+and are reported separately from the call counts for this reason.
+
+**Diagnosis: NOT a phone-parsing bug.** The sheet data is 91% clean
+single numbers (no extensions, one rare multi-number cell), and every
+unmatched Dialpad number arrives in a single uniform clean format with
+no anomaly to fix. The unmatched calls are concentrated in a small set
+of real, correctly-formatted phone numbers that simply aren't any
+active job's stored `customer_phone` — consistent with vendor/
+subcontractor/supplier lines (13 numbers shared across PMs), calls
+about jobs not currently in `casey_active_jobs` (closed, not yet
+entered, or with a stale/blank sheet phone cell), and ordinary
+unrelated calls. Per the task's decision rule: **changed nothing in
+the matching/normalizer code** — `_normalize_phone()`'s existing
+last-10-digit behavior (Stage 5) is already correct and sufficient;
+there was no multi-number-cell or extension failure mode to fix. No
+backfill was run, since there is nothing for a backfill to correct.
