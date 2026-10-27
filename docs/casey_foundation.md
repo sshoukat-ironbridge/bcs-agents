@@ -86,3 +86,16 @@ checklist content to each other and to the pre-cleanup checklist (same
 section composition and line formats; absolute counts drift slightly
 run-to-run only because of ordinary deadline/retirement churn, not the
 cleanup). Full test suite: 82 passed.
+
+## Part 2: Casey foundations
+
+### Taxonomy (Step 6)
+
+`agents/casey/taxonomy.py` holds the severities, statuses, reasons and root
+causes verbatim from Chris's v1.3 doc, plus:
+- `severity_rank()` for ordered comparison (Low < Medium < High < Critical).
+- `SEVERITY_GUIDE`: the interpretive text per severity, for later prompts.
+- `validate_reasons()`: enforces "Other (explain in Notes)" requiring
+  non-empty notes, whether it's the primary reason or among the additional
+  reasons.
+- `default_root_cause()`: always `"Undetermined (default)"`.
