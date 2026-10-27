@@ -5,9 +5,12 @@ Pure function, no DB/network access — the caller resolves config values
 send must go through utils/outbound.outbound_enabled(); this module only
 plans rows shaped like casey_notifications inserts.
 """
+from datetime import datetime
 from typing import Any
 
 from agents.casey.flag_logic import ACTIONS
+
+BACKFILL_REASON = "backfill"
 
 # Severity -> which named recipients get an email, in addition to the PM
 # (always included). Doc text says Tatiana joins from High; the doc's
@@ -124,4 +127,24 @@ def plan_notifications(
         if override or addr:
             notifications.append(_row("email", override or addr))
 
+    return notifications
+
+
+def apply_backfill_suppression(
+    notifications: list[dict[str, Any]],
+    event_time: "datetime | None",
+    live_since: "datetime | None",
+) -> list[dict[str, Any]]:
+    """Stage 7 backfill rule: any notification for an event (message
+    occurred_at, watch due_at, flag event) before `live_since`, OR
+    whenever `live_since` is unset entirely, is marked
+    status="suppressed", reason="backfill" instead of "planned" — a
+    missing event_time is treated the same as "before go-live" (fail
+    safe, never guess something is live). Mutates and returns the same
+    list of row dicts plan_notifications() built."""
+    is_backfill = live_since is None or event_time is None or event_time < live_since
+    if is_backfill:
+        for row in notifications:
+            row["status"] = "suppressed"
+            row["reason"] = BACKFILL_REASON
     return notifications

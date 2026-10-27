@@ -252,6 +252,7 @@ if _db_available:
         severity   = Column(String, nullable=True)
         dedup_key  = Column(String, nullable=False)
         status     = Column(String, nullable=False, default="planned")  # planned | sent | suppressed | failed
+        reason     = Column(String, nullable=True)  # e.g. "backfill" when status == "suppressed"
         planned_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         sent_at    = Column(DateTime(timezone=True), nullable=True)
         error      = Column(Text, nullable=True)
@@ -509,6 +510,10 @@ def init_db() -> None:
             """))
             conn.commit()
 
+            # Stage 7: backfill suppression reason.
+            conn.execute(text("ALTER TABLE casey_notifications ADD COLUMN IF NOT EXISTS reason TEXT"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -579,6 +584,12 @@ def init_db() -> None:
                 "casey_gmail_max_messages": "500",
                 "casey_gmail_overlap_hours": "2",
                 "casey_gmail_store_unmatched": "false",
+                # Backfill suppression (Stage 7): a UTC ISO timestamp. Any
+                # notification for an event before this timestamp, OR any
+                # time this is unset, is stored suppressed/backfill instead
+                # of planned. Unset until explicitly set at go-live — see
+                # docs/casey_foundation.md for how to set it.
+                "casey_live_since": "",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -1661,6 +1672,7 @@ def create_notification(row: dict) -> "int | None":
                 severity=row.get("severity"),
                 dedup_key=row["dedup_key"],
                 status=row.get("status", "planned"),
+                reason=row.get("reason"),
             )
             s.add(notification)
             s.commit()

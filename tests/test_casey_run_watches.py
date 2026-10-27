@@ -216,3 +216,46 @@ def test_find_unwatched_inbound_messages_is_scoped_to_gmail_source():
     import db.state_store as state_store_module
     source = inspect.getsource(state_store_module.find_unwatched_inbound_messages)
     assert 'CustomerMessage.source == "gmail"' in source
+
+
+def test_overdue_notification_suppressed_when_live_since_unset():
+    watch = {"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck", "pm_name": "PM One",
+             "customer_email": "c@example.com", "received_at": T0, "due_at": T0 + timedelta(hours=24),
+             "status": "waiting"}
+    with patch("db.state_store.get_config", side_effect=_config()), \
+         patch("db.state_store.find_unwatched_inbound_messages", return_value=[]), \
+         patch("db.state_store.get_open_response_watches", return_value=[watch]), \
+         patch("db.state_store.get_response_candidates", return_value=[]), \
+         patch("db.state_store.notification_exists", return_value=False), \
+         patch("db.state_store.find_pm", return_value=None), \
+         patch("agents.casey.run_watches.datetime") as mock_dt, \
+         patch("db.state_store.update_response_watch"), \
+         patch("db.state_store.create_notification") as mock_notify:
+        mock_dt.now.return_value = T0 + timedelta(hours=30)
+        run(dry_run=False)
+    stored_rows = [call.args[0] for call in mock_notify.call_args_list]
+    assert stored_rows
+    for row in stored_rows:
+        assert row["status"] == "suppressed"
+        assert row["reason"] == "backfill"
+
+
+def test_overdue_notification_planned_when_live_since_is_in_the_past():
+    watch = {"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck", "pm_name": "PM One",
+             "customer_email": "c@example.com", "received_at": T0, "due_at": T0 + timedelta(hours=24),
+             "status": "waiting"}
+    with patch("db.state_store.get_config", side_effect=_config({"casey_live_since": "2020-01-01T00:00:00+00:00"})), \
+         patch("db.state_store.find_unwatched_inbound_messages", return_value=[]), \
+         patch("db.state_store.get_open_response_watches", return_value=[watch]), \
+         patch("db.state_store.get_response_candidates", return_value=[]), \
+         patch("db.state_store.notification_exists", return_value=False), \
+         patch("db.state_store.find_pm", return_value=None), \
+         patch("agents.casey.run_watches.datetime") as mock_dt, \
+         patch("db.state_store.update_response_watch"), \
+         patch("db.state_store.create_notification") as mock_notify:
+        mock_dt.now.return_value = T0 + timedelta(hours=30)
+        run(dry_run=False)
+    stored_rows = [call.args[0] for call in mock_notify.call_args_list]
+    assert stored_rows
+    for row in stored_rows:
+        assert row["status"] == "planned"

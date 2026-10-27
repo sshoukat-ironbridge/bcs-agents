@@ -711,3 +711,45 @@ Confirmed: `customer_messages` has exactly 6 inbound, non-automated
 (4 responded, 2 waiting, 0 overdue, 0 excluded; 0 notifications left).
 Re-ran `run_watches` for real afterward: 0 new watches (all 6 already
 exist), counts unchanged.
+
+### Part A Step 2: backfill suppression
+
+`casey_live_since` (`app_config`, UTC ISO timestamp, default **unset**
+i.e. empty string): any notification planned for an event (a message's
+`occurred_at`, a watch's `due_at`, or a flag event's timestamp) before
+`casey_live_since`, **or any time `casey_live_since` is unset**, is
+stored `status="suppressed"`, `reason="backfill"` instead of
+`"planned"`. A missing event time is treated the same as "before
+go-live" — fail safe, never guess something is live.
+`agents/casey/notification_plan.py::apply_backfill_suppression()`
+implements this (pure, mutates the rows `plan_notifications()` built);
+wired into `run_watches.py`'s overdue-notification path via
+`ingest_windows.parse_cursor()` to parse the config value. New
+`casey_notifications.reason` column (nullable text) added via
+migration, verified on the local DB.
+
+**Setting `casey_live_since` at go-live**: once Casey is ready to
+actually notify people (even before real sending is implemented, since
+"planned" vs. "suppressed" is what a human reviews), set the config key
+to the current UTC time in ISO 8601 format, e.g. via the dashboard
+config UI or directly:
+```
+docker compose run --rm oca python3 -c "
+from db.state_store import set_config
+from datetime import datetime, timezone
+set_config('casey_live_since', datetime.now(timezone.utc).isoformat())
+"
+```
+Everything with an event time before that moment (all of today's
+backlog) stays `suppressed`/`backfill` forever; only genuinely new
+events after that moment ever get `planned`.
+
+### Part A Step 3: corrected counts
+
+Watches: 4 `responded`, 2 `waiting`, 0 `overdue`, 0 `excluded` (6
+total — all real `gmail` rows now; the DB cleanup in Step 1 removed
+the 82 wrongly-created `dialpad_call`-sourced ones). Notifications: 0
+rows (no watch is currently overdue to trigger one; the schema and
+suppression logic are verified by unit tests and the migration is
+confirmed live — `casey_notifications.reason` column exists on the
+local DB).

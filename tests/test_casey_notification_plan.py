@@ -1,4 +1,9 @@
-from agents.casey.notification_plan import plan_notifications, build_message, DEFAULT_EMAIL_MATRIX
+from datetime import datetime, timezone
+
+from agents.casey.notification_plan import (
+    plan_notifications, build_message, DEFAULT_EMAIL_MATRIX,
+    apply_backfill_suppression, BACKFILL_REASON,
+)
 
 FLAG = {
     "id": 42,
@@ -115,3 +120,44 @@ def test_default_email_matrix_matches_table():
     assert DEFAULT_EMAIL_MATRIX["Medium"] == ["ana_maria", "tatiana"]
     assert DEFAULT_EMAIL_MATRIX["High"] == ["ana_maria", "tatiana", "chris"]
     assert DEFAULT_EMAIL_MATRIX["Critical"] == ["ana_maria", "tatiana", "chris"]
+
+
+# --- Backfill suppression (Stage 7) -----------------------------------------
+
+def test_suppressed_when_live_since_unset():
+    rows = plan_notifications(FLAG, "create")
+    event_time = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    result = apply_backfill_suppression(rows, event_time, live_since=None)
+    assert result  # still returns the planned rows, just marked suppressed
+    for row in result:
+        assert row["status"] == "suppressed"
+        assert row["reason"] == BACKFILL_REASON
+
+
+def test_suppressed_when_event_before_live_since():
+    rows = plan_notifications(FLAG, "create")
+    live_since = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    event_time = datetime(2026, 10, 1, tzinfo=timezone.utc)  # before live_since
+    result = apply_backfill_suppression(rows, event_time, live_since)
+    for row in result:
+        assert row["status"] == "suppressed"
+        assert row["reason"] == BACKFILL_REASON
+
+
+def test_planned_when_event_after_live_since():
+    rows = plan_notifications(FLAG, "create")
+    live_since = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    event_time = datetime(2026, 11, 1, tzinfo=timezone.utc)  # after live_since
+    result = apply_backfill_suppression(rows, event_time, live_since)
+    for row in result:
+        assert row["status"] == "planned"
+        assert "reason" not in row or row.get("reason") is None
+
+
+def test_suppressed_when_event_time_missing():
+    rows = plan_notifications(FLAG, "create")
+    live_since = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    result = apply_backfill_suppression(rows, None, live_since)
+    for row in result:
+        assert row["status"] == "suppressed"
+        assert row["reason"] == BACKFILL_REASON

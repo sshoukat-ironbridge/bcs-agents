@@ -86,7 +86,8 @@ def _candidates_for_classify(thread_id, job_key) -> list[dict]:
 
 def _plan_overdue_notification(watch: dict, dry_run: bool) -> None:
     from db.state_store import get_config, find_pm, notification_exists, create_notification
-    from agents.casey.notification_plan import plan_notifications, RECIPIENT_CONFIG_KEYS
+    from agents.casey.notification_plan import plan_notifications, apply_backfill_suppression, RECIPIENT_CONFIG_KEYS
+    from agents.casey.ingest_windows import parse_cursor
 
     dedup_key = f"watch:{watch['id']}:overdue"
     if notification_exists(dedup_key):
@@ -107,6 +108,8 @@ def _plan_overdue_notification(watch: dict, dry_run: bool) -> None:
     pm_email = (pm or {}).get("email", "")
 
     rows = plan_notifications(synthetic_flag, "create", recipient_addresses=recipient_addresses, pm_email=pm_email)
+    live_since = parse_cursor(get_config("casey_live_since"))
+    rows = apply_backfill_suppression(rows, watch.get("due_at"), live_since)
     if dry_run:
         return
     for row in rows:
