@@ -27,27 +27,40 @@ WATCH_NOTIFICATION_SEVERITY = "Medium"
 WATCH_NOTIFICATION_REASON = "Lack of communication / no updates"
 
 
-def _create_missing_watches() -> int:
+def _create_missing_watches(dry_run: bool) -> "tuple[int, list[dict]]":
+    """Returns (created_count, new_watch_dicts). In a dry run, nothing is
+    persisted (created_count stays 0) but the would-be watches are still
+    built in memory so _evaluate_open_watches() below has something
+    meaningful to classify even before any watch has ever been created."""
     from db.state_store import find_unwatched_inbound_messages, create_response_watch, get_config
 
     window_hours = int(get_config("casey_response_window_hours") or DEFAULT_WINDOW_HOURS)
     created = 0
+    new_watches = []
     for message in find_unwatched_inbound_messages():
         received_at = message["occurred_at"]
         if received_at is None:
             continue
-        watch_id = create_response_watch({
-            "thread_id": message.get("thread_id"),
-            "inbound_message_id": message["id"],
-            "job_key": message.get("job_key"),
-            "pm_name": message.get("pm_name"),
-            "customer_email": message.get("customer_email"),
-            "received_at": received_at,
-            "due_at": received_at + timedelta(hours=window_hours),
+        due_at = received_at + timedelta(hours=window_hours)
+        watch_id = None
+        if not dry_run:
+            watch_id = create_response_watch({
+                "thread_id": message.get("thread_id"),
+                "inbound_message_id": message["id"],
+                "job_key": message.get("job_key"),
+                "pm_name": message.get("pm_name"),
+                "customer_email": message.get("customer_email"),
+                "received_at": received_at,
+                "due_at": due_at,
+            })
+            if watch_id is not None:
+                created += 1
+        new_watches.append({
+            "id": watch_id, "thread_id": message.get("thread_id"), "job_key": message.get("job_key"),
+            "pm_name": message.get("pm_name"), "customer_email": message.get("customer_email"),
+            "received_at": received_at, "due_at": due_at, "status": "waiting",
         })
-        if watch_id is not None:
-            created += 1
-    return created
+    return created, new_watches
 
 
 def _candidates_for_classify(thread_id, job_key) -> list[dict]:
@@ -103,7 +116,7 @@ def _plan_overdue_notification(watch: dict, dry_run: bool) -> None:
         create_notification(row)
 
 
-def _evaluate_open_watches(now: datetime, dry_run: bool) -> dict[str, int]:
+def _evaluate_open_watches(now: datetime, dry_run: bool, new_watches: list) -> dict[str, int]:
     from db.state_store import get_config, get_open_response_watches, update_response_watch
     from agents.casey.response_watch import classify_response
 
@@ -112,7 +125,13 @@ def _evaluate_open_watches(now: datetime, dry_run: bool) -> dict[str, int]:
 
     counts = {"waiting": 0, "responded": 0, "overdue": 0, "excluded": 0}
 
-    for watch in get_open_response_watches():
+    # A real run already persisted new_watches via create_response_watch()
+    # before this function was called, so get_open_response_watches()
+    # already includes them — adding new_watches again would double-count
+    # them. Only a dry run (which persists nothing) needs them added here,
+    # since they otherwise never got evaluated at all.
+    watches_to_evaluate = get_open_response_watches() + (new_watches if dry_run else [])
+    for watch in watches_to_evaluate:
         candidates = _candidates_for_classify(watch.get("thread_id"), watch.get("job_key"))
         inbound = {
             "received_at": watch["received_at"],
@@ -146,9 +165,9 @@ def _evaluate_open_watches(now: datetime, dry_run: bool) -> dict[str, int]:
 
 
 def run(dry_run: bool = False) -> dict[str, Any]:
-    created = 0 if dry_run else _create_missing_watches()
+    created, new_watches = _create_missing_watches(dry_run)
     now = datetime.now(timezone.utc)
-    counts = _evaluate_open_watches(now, dry_run)
+    counts = _evaluate_open_watches(now, dry_run, new_watches)
     return {"created": created, **counts}
 
 

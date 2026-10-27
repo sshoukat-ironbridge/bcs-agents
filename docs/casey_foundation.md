@@ -638,3 +638,45 @@ updates"` — a watch has no taxonomy classification of its own, so this
 is a fixed, documented default), deduped on `watch:<id>:overdue` so a
 watch is never re-notified. No notifications are ever sent from here —
 rows are stored with `status="planned"` only.
+
+**2 real bugs caught by the live check against the actual local DB
+(Stage 6 Part B Step 6)**:
+1. `casey_notifications`'s unique constraint was `dedup_key` alone —
+   but `notification_plan.plan_notifications()` intentionally returns
+   several rows (Slack channel + DM + one per email recipient) sharing
+   ONE `dedup_key` per batch, so every row after the first in a real
+   batch hit a `UniqueViolation`. Widened to
+   `UNIQUE (dedup_key, channel, recipient)`: the same channel+recipient
+   for an unchanged `dedup_key` still never double-inserts, but a
+   batch's other channels/recipients now can. Migrated on the local DB
+   (drop old constraint, add the new one).
+2. `_evaluate_open_watches()` double-counted every newly-created watch
+   on a real run: `_create_missing_watches()` already persists new
+   watches via `create_response_watch()` before evaluation runs, so
+   `get_open_response_watches()` already includes them — appending the
+   in-memory `new_watches` list on top counted each one twice (first
+   live run: 176 classifications for only 88 real watches). Fixed to
+   only add `new_watches` to the evaluation set during a **dry run**
+   (which persists nothing, so they're the only record of those
+   messages); a real run relies solely on the DB query.
+
+**Live summaries** (local DB, real mailbox): `ingest_gmail --since 7d
+--dry-run`: 132 messages, 16 stored candidates, 89 unmatched, 27
+automated, 0 ambiguous. Real run: 133 messages, **17 new rows**.
+Rerun: 20 messages (overlap window only), **0 new rows** — confirmed
+directly in Postgres (`customer_messages` holds exactly 17 `gmail`
+rows, unchanged). Per-PM stored-email counts: Laura Peña 7, Daniel
+Gomez Cortez 3, Andrea Ortega 2, Fernanda 1, Santiago P 1, blank
+(unmatched-PM) 3. Customer emails seen vs. stored: 83 inbound + 50
+outbound seen, 17 stored (candidates that matched a known customer
+address and weren't automated).
+
+`run_watches --dry-run`: 15 waiting, 8 responded, 65 overdue (0
+excluded) — meaningful even though no watch existed yet, confirming
+the dry-run fix. Real run: **88 new watches created**, same 15/8/65
+split, 195 notification rows planned (65 overdue × 3 channels), all
+`status="planned"`. Rerun: **0 new watches**, 15 waiting / 65 overdue
+unchanged, 0 responded (the 8 that resolved on the first run are now
+closed and correctly excluded from the open-watch count) — confirmed
+directly in Postgres (88 total watches, 195 notification rows,
+unchanged after the rerun).

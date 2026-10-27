@@ -233,7 +233,17 @@ if _db_available:
 
     class CaseyNotification(Base):
         __tablename__ = "casey_notifications"
-        __table_args__ = (UniqueConstraint("dedup_key", name="uq_casey_notifications_dedup_key"),)
+        # LIVE-CHECKED: plan_notifications() intentionally returns several
+        # rows (Slack channel + DM + one per email recipient) sharing ONE
+        # dedup_key per batch — a dedup_key-only unique constraint rejects
+        # every row after the first with a UniqueViolation. Unique on
+        # (dedup_key, channel, recipient) instead: the same channel+
+        # recipient for the same unchanged dedup_key never double-inserts,
+        # but a batch's other channels/recipients still can.
+        __table_args__ = (
+            UniqueConstraint("dedup_key", "channel", "recipient",
+                              name="uq_casey_notifications_dedup_key_channel_recipient"),
+        )
         id         = Column(Integer, primary_key=True, autoincrement=True)
         flag_id    = Column(Integer, ForeignKey("casey_flags.id"), nullable=True)
         watch_id   = Column(Integer, ForeignKey("casey_response_watches.id"), nullable=True)
@@ -474,6 +484,29 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS duration_ms INTEGER"))
             conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS call_state TEXT"))
             conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS customer_phone TEXT"))
+            conn.commit()
+
+            # Stage 6: casey_notifications' unique constraint was dedup_key
+            # alone, which rejects every row after the first in a batch
+            # that intentionally shares one dedup_key (Slack channel + DM +
+            # email recipients) — widen it to (dedup_key, channel, recipient).
+            conn.execute(text(
+                "ALTER TABLE casey_notifications DROP CONSTRAINT IF EXISTS uq_casey_notifications_dedup_key"
+            ))
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'uq_casey_notifications_dedup_key_channel_recipient'
+                        AND conrelid = 'casey_notifications'::regclass
+                    ) THEN
+                        ALTER TABLE casey_notifications ADD CONSTRAINT
+                        uq_casey_notifications_dedup_key_channel_recipient
+                        UNIQUE (dedup_key, channel, recipient);
+                    END IF;
+                END $$
+            """))
             conn.commit()
 
             # One-time migration: retire Patricia Anderson (manually removed from sheet)

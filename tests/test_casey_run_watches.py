@@ -57,6 +57,28 @@ def test_creates_a_watch_for_unwatched_inbound_message():
     assert stats["created"] == 1
 
 
+def test_newly_created_watch_is_evaluated_exactly_once_not_twice():
+    # Regression: a real (non-dry) run persists new watches via
+    # create_response_watch() BEFORE evaluating, so get_open_response_watches()
+    # already includes them. Adding the in-memory new_watches list on top
+    # would double-count every newly created watch's classification.
+    unwatched = [{"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck",
+                  "pm_name": "PM One", "customer_email": "c@example.com",
+                  "customer_phone": "", "occurred_at": T0}]
+    persisted_watch = {"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck",
+                        "pm_name": "PM One", "customer_email": "c@example.com",
+                        "received_at": T0, "due_at": T0 + timedelta(hours=24), "status": "waiting"}
+    with patch("db.state_store.get_config", side_effect=_config()), \
+         patch("db.state_store.find_unwatched_inbound_messages", return_value=unwatched), \
+         patch("db.state_store.create_response_watch", return_value=1), \
+         patch("db.state_store.get_open_response_watches", return_value=[persisted_watch]), \
+         patch("db.state_store.get_response_candidates", return_value=[]), \
+         patch("agents.casey.run_watches.datetime") as mock_dt:
+        mock_dt.now.return_value = T0 + timedelta(hours=1)
+        stats = run(dry_run=False)
+    assert stats["waiting"] == 1  # not 2
+
+
 def test_dry_run_never_creates_watches():
     unwatched = [{"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck",
                   "pm_name": "PM One", "customer_email": "c@example.com",
@@ -145,6 +167,25 @@ def test_overdue_notification_only_planned_once_per_watch():
          patch("db.state_store.update_response_watch"):
         run(dry_run=False)
     mock_notify.assert_not_called()
+
+
+def test_dry_run_still_classifies_newly_discovered_inbound_messages():
+    # Even with nothing persisted yet, a dry run should still show
+    # meaningful counts for messages that would become new watches.
+    unwatched = [{"id": 1, "thread_id": "t1", "job_key": "A|to_start|Deck",
+                  "pm_name": "PM One", "customer_email": "c@example.com",
+                  "customer_phone": "", "occurred_at": T0}]
+    with patch("db.state_store.get_config", side_effect=_config()), \
+         patch("db.state_store.find_unwatched_inbound_messages", return_value=unwatched), \
+         patch("db.state_store.create_response_watch") as mock_create, \
+         patch("db.state_store.get_open_response_watches", return_value=[]), \
+         patch("db.state_store.get_response_candidates", return_value=[]), \
+         patch("agents.casey.run_watches.datetime") as mock_dt:
+        mock_dt.now.return_value = T0 + timedelta(hours=1)
+        stats = run(dry_run=True)
+    mock_create.assert_not_called()
+    assert stats["created"] == 0
+    assert stats["waiting"] == 1
 
 
 def test_dry_run_never_updates_or_notifies():
