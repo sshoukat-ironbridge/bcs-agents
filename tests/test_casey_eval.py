@@ -75,7 +75,9 @@ def test_offline_mode_makes_no_real_api_call():
     with patch("integrations.anthropic_client.call_with_tool") as mock_call:
         result = run_eval(offline=True)
     mock_call.assert_not_called()
-    assert len(result["rows"]) == 9  # the full calibration set
+    # 9 calibration cases minus the 1 summary-only item (Sandstrom's
+    # pre-cancellation scenario), which becomes history, never a graded row.
+    assert len(result["rows"]) == 8
 
 
 def test_offline_mode_never_touches_the_database():
@@ -104,6 +106,32 @@ def test_all_customers_and_dates_covered():
     result = run_eval(offline=True)
     customers = {row["customer"] for row in result["rows"]}
     assert customers == {"Julie Harrison", "Danielle Ewen", "Caroline Day", "Betsy Sandstrom"}
+
+
+def test_summary_only_item_is_never_an_independent_graded_row():
+    result = run_eval(offline=True)
+    sandstrom_rows = [r for r in result["rows"] if r["customer"] == "Betsy Sandstrom"]
+    # Only the dated (2026-10-20) Sandstrom case is graded - the
+    # pre-cancellation summary becomes history for it, not its own row.
+    assert len(sandstrom_rows) == 1
+    assert sandstrom_rows[0]["date"] == "2026-10-20"
+
+
+def test_summary_only_item_feeds_sandstroms_history():
+    seen_histories = []
+
+    def fake_analyze_one(message, history, open_flag, **kwargs):
+        if message["body_text"].startswith("We'll let you know"):
+            seen_histories.append(list(history))
+        return {
+            "status": "ok", "sentiment": "neutral", "suggested_severity": None,
+            "summary": "s", "confidence": 0.5, "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    with patch("agents.casey.analyze.analyze_one", fake_analyze_one):
+        run_eval(offline=True)
+    assert len(seen_histories) == 1
+    assert any(h.get("is_summary") for h in seen_histories[0])
 
 
 def test_history_accumulates_within_customer_chronologically():

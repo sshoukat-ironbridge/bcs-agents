@@ -872,3 +872,30 @@ that cost money, no sends) — `process_flags` and `run_watches` already
 support it; `ingest_dialpad`/`ingest_gmail` run their own `--dry-run`
 path. `--stages stage1,stage2` picks a subset. Nothing outbound is
 implemented anywhere in this chain — only planned notification rows.
+
+## Part D: Verify
+
+### Real-API bugs caught by the first live eval run
+
+Three real bugs, caught only by a real API call (none of these appear
+when mocked — the mocks shared the same wrong assumptions):
+
+1. **`minimum`/`maximum` on a `number` schema property is rejected**
+   (`400 "properties maximum, minimum are not supported"`). Removed
+   from `sentiment_score`/`confidence` in `build_input_schema()`; the
+   range check moved into `validate_analysis_output()` instead.
+2. **A nullable enum (`type: ["string", "null"]` + `enum`) is rejected**
+   under strict mode (`400 "Enum value 'Low' does not match declared
+   type"`). Fixed to the correct `anyOf` form:
+   `{"anyOf": [{"type": "string", "enum": SEVERITIES}, {"type":
+   "null"}]}`.
+3. **Harness bug (not a model/API bug)**: the Sandstrom pre-cancellation
+   scenario was being graded as its own row with `expected_severity:
+   "High"`, when the task's own wording calls for it to be a
+   **"summary-only history item"** — context for the dated Oct 20 case,
+   never independently analyzed or scored. Fixed `scripts/casey_eval.py`
+   to feed it straight into history and skip the model call/row
+   entirely for summary-only cases; the graded set is now 8 cases, not
+   9 — 2 new regression tests confirm it.
+
+All three fixes verified against the real API (not mocked).

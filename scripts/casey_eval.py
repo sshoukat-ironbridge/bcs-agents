@@ -77,6 +77,19 @@ def run_eval(offline: bool = False, model: str = DEFAULT_MODEL, max_tokens: int 
     for customer, customer_cases in by_customer.items():
         history: list[dict] = []
         for case in customer_cases:
+            if _is_summary_only(case):
+                # Not a real customer message to analyze — a scenario
+                # summary (e.g. Sandstrom's pre-cancellation history) that
+                # becomes history context for this customer's later
+                # messages. Never independently graded as its own row.
+                history.append({
+                    "occurred_at": case.get("date") or "(summary)",
+                    "sentiment": None,
+                    "summary": case["text"],
+                    "is_summary": True,
+                })
+                continue
+
             message = {"id": None, "body_text": case["text"], "occurred_at": case.get("date")}
 
             if offline:
@@ -92,7 +105,7 @@ def run_eval(offline: bool = False, model: str = DEFAULT_MODEL, max_tokens: int 
             got_severity = result.get("suggested_severity") if result["status"] == "ok" else None
             row = {
                 "customer": customer,
-                "date": case.get("date") or "(summary)",
+                "date": case.get("date"),
                 "expected": case["expected_severity"],
                 "got": got_severity if got_severity is not None else "(none)",
                 "pass": passes(case, got_severity),
@@ -102,10 +115,10 @@ def run_eval(offline: bool = False, model: str = DEFAULT_MODEL, max_tokens: int 
             rows.append(row)
 
             history.append({
-                "occurred_at": case.get("date") or "(summary)",
+                "occurred_at": case.get("date"),
                 "sentiment": result.get("sentiment"),
                 "summary": result.get("summary") or case["text"][:80],
-                "is_summary": _is_summary_only(case),
+                "is_summary": False,
             })
 
     cost = (

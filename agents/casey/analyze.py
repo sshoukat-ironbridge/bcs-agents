@@ -49,10 +49,19 @@ def build_input_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "sentiment": {"type": "string", "enum": ["positive", "neutral", "negative"]},
-            "sentiment_score": {"type": "number", "minimum": -1, "maximum": 1},
+            # No minimum/maximum here: Anthropic's tool input_schema
+            # rejects them on "number" properties (400 "properties
+            # maximum, minimum are not supported") — confirmed live, not
+            # assumed. Range is enforced in validate_analysis_output()
+            # instead.
+            "sentiment_score": {"type": "number"},
             "is_strong_praise": {"type": "boolean"},
             "red_flag_suggested": {"type": "boolean"},
-            "severity": {"type": ["string", "null"], "enum": SEVERITIES + [None]},
+            # A type array ["string", "null"] combined with "enum" is
+            # rejected by Anthropic's strict schema validator ("Enum
+            # value 'Low' does not match declared type") — confirmed
+            # live, not assumed. anyOf is the correct nullable-enum form.
+            "severity": {"anyOf": [{"type": "string", "enum": SEVERITIES}, {"type": "null"}]},
             "primary_reason": {"type": "string", "enum": REASONS},
             "additional_reasons": {"type": "array", "items": {"type": "string", "enum": REASONS}},
             "reason_notes": {"type": "string"},
@@ -61,7 +70,7 @@ def build_input_schema() -> dict[str, Any]:
             "evidence_quote": {"type": "string"},
             "same_complaint_as_open_flag": {"type": "boolean"},
             "trajectory": {"type": "string", "enum": TRAJECTORIES},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "confidence": {"type": "number"},  # range enforced in validate_analysis_output(), see sentiment_score above
         },
         "required": [
             "sentiment", "sentiment_score", "is_strong_praise", "red_flag_suggested",
@@ -135,6 +144,16 @@ def validate_analysis_output(output: dict, target_text: str) -> list[str]:
     errors = []
     if output.get("sentiment") not in ("positive", "neutral", "negative"):
         errors.append(f"invalid sentiment: {output.get('sentiment')!r}")
+
+    # Range checks live here, not in the schema: Anthropic's tool
+    # input_schema rejects minimum/maximum on "number" properties.
+    score = output.get("sentiment_score")
+    if not isinstance(score, (int, float)) or not (-1 <= score <= 1):
+        errors.append(f"sentiment_score out of range [-1, 1]: {score!r}")
+
+    confidence = output.get("confidence")
+    if not isinstance(confidence, (int, float)) or not (0 <= confidence <= 1):
+        errors.append(f"confidence out of range [0, 1]: {confidence!r}")
 
     severity = output.get("severity")
     if severity is not None and severity not in SEVERITIES:
