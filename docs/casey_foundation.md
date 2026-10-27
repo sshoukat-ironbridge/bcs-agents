@@ -89,6 +89,45 @@ cleanup). Full test suite: 82 passed.
 
 ## Part 2: Casey foundations
 
+### Dashboard auth audit (Step 7j)
+
+Today's auth is **not** a single shared credential: `dashboard_users` is a
+real per-account table (email + PBKDF2 password hash) with server-side
+sessions in `dashboard_sessions` (`dashboard/auth.py`), login/logout/change
+password all working per-user. There is no `create_user` script in the repo
+— accounts are added by hand — and, more importantly, **no role concept
+exists at all**: every logged-in account currently has identical, full
+access (the login middleware only checks "is there a valid session," never
+"what can this user see").
+
+Given that, added a `role` column (default `'admin'`) and a `linked_name`
+column directly on the existing `dashboard_users` table, rather than a new
+table, so every account that could already log in keeps working exactly as
+before (full access, role `admin`) with zero migration needed for existing
+rows. No UI yet; `agents/casey/access.py` (Step 8a) is the role filter this
+sets up for.
+
+### Schema (Step 7)
+
+New tables (all via `Base.metadata.create_all`, confirmed on both a fresh
+DB and the existing local DB): `customer_messages`, `message_analyses`,
+`casey_flags`, `casey_flag_events`, `casey_notifications`,
+`casey_response_watches`, `ingest_cursors`, `webhook_events`.
+
+- `casey_flags.dedup_key` has a **partial unique index** (`WHERE closed_at
+  IS NULL`) so only one non-closed flag can exist per dedup key at a time;
+  a closed flag never blocks a fresh one for the same underlying complaint.
+- `casey_notifications.dedup_key` has a plain unique index (an unchanged
+  record never alerts twice, regardless of open/closed state).
+- `customer_messages` has `UNIQUE(source, external_id)` so re-ingesting the
+  same Gmail/Dialpad item is a no-op.
+- `job_key` is the composite `client_name|sheet_tab|primary_job_type`
+  string (see "composite project key" decision below) — used everywhere in
+  place of a real job identifier, since `casey_active_jobs` has no stable
+  single-column ID that survives a client's job being re-keyed.
+- Casey only reads `casey_active_jobs`; no column on it is owned by Casey
+  except `address` (Step 7a, Part 1).
+
 ### Taxonomy (Step 6)
 
 `agents/casey/taxonomy.py` holds the severities, statuses, reasons and root

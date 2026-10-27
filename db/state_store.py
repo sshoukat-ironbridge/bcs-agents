@@ -16,7 +16,7 @@ Base = None
 try:
     from sqlalchemy import (
         create_engine, Column, Integer, String, DateTime, Date,
-        Boolean, UniqueConstraint, text, Text,
+        Boolean, UniqueConstraint, text, Text, ForeignKey, JSON, Float, Index,
     )
     from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -118,6 +118,11 @@ if _db_available:
         id            = Column(Integer, primary_key=True, autoincrement=True)
         email         = Column(String, unique=True, nullable=False, index=True)
         password_hash = Column(String, nullable=False)
+        # Role-based visibility (agents/casey/access.py). Existing rows default
+        # to 'admin' via the ALTER TABLE default below, so every account that
+        # could already log in keeps full access unchanged.
+        role          = Column(String, nullable=False, default="admin")
+        linked_name   = Column(String, nullable=True)  # PM/estimator display name, for role in (pm, estimator)
         created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         updated_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -127,6 +132,152 @@ if _db_available:
         user_id    = Column(Integer, nullable=False, index=True)
         created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    # --- Casey foundations (read OCA's casey_active_jobs read-only) ---
+
+    class CustomerMessage(Base):
+        __tablename__ = "customer_messages"
+        __table_args__ = (
+            UniqueConstraint("source", "external_id", name="uq_customer_messages_source_external_id"),
+            Index("ix_customer_messages_job_key", "job_key"),
+            Index("ix_customer_messages_thread_id", "thread_id"),
+            Index("ix_customer_messages_occurred_at", "occurred_at"),
+        )
+        id              = Column(Integer, primary_key=True, autoincrement=True)
+        source          = Column(String, nullable=False)  # gmail | dialpad_call | dialpad_sms
+        external_id     = Column(String, nullable=False)
+        thread_id       = Column(String, nullable=True)
+        job_id          = Column(Integer, ForeignKey("casey_active_jobs.id"), nullable=True)
+        job_key         = Column(String, nullable=True)  # "client|tab|primary_job_type"
+        customer_email  = Column(String, nullable=True)
+        customer_phone  = Column(String, nullable=True)
+        direction       = Column(String, nullable=False)  # inbound | outbound | internal
+        occurred_at     = Column(DateTime(timezone=True), nullable=False)
+        sender          = Column(String, nullable=True)
+        subject         = Column(Text, nullable=True)
+        body_text       = Column(Text, nullable=True)
+        is_automated    = Column(Boolean, nullable=False, default=False)
+        pm_name         = Column(String, nullable=True)
+        estimator_name  = Column(String, nullable=True)
+        ingested_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        raw_ref         = Column(Text, nullable=True)
+
+    class MessageAnalysis(Base):
+        __tablename__ = "message_analyses"
+        id                   = Column(Integer, primary_key=True, autoincrement=True)
+        message_id           = Column(Integer, ForeignKey("customer_messages.id"), nullable=False, index=True)
+        model                = Column(String, nullable=True)
+        prompt_version       = Column(String, nullable=True)
+        sentiment            = Column(String, nullable=True)  # positive | neutral | negative
+        sentiment_score      = Column(Float, nullable=True)
+        is_strong_praise     = Column(Boolean, nullable=False, default=False)
+        red_flag_suggested   = Column(Boolean, nullable=True)
+        suggested_severity   = Column(String, nullable=True)
+        suggested_reasons    = Column(JSON, nullable=True)
+        suggested_root_cause = Column(String, nullable=True)
+        summary              = Column(Text, nullable=True)
+        evidence_quote       = Column(Text, nullable=True)
+        raw_json             = Column(JSON, nullable=True)
+        created_at           = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    class CaseyFlag(Base):
+        __tablename__ = "casey_flags"
+        __table_args__ = (
+            Index("ix_casey_flags_job_key", "job_key"),
+            Index("ix_casey_flags_status", "status"),
+            Index("ix_casey_flags_severity", "severity"),
+            # Partial unique index: only one non-closed flag per dedup_key —
+            # an already-closed flag never blocks a fresh one for the same key.
+            Index("uq_casey_flags_open_dedup_key", "dedup_key", unique=True,
+                  postgresql_where=text("closed_at IS NULL")),
+        )
+        id                  = Column(Integer, primary_key=True, autoincrement=True)
+        job_id              = Column(Integer, ForeignKey("casey_active_jobs.id"), nullable=True)
+        job_key             = Column(String, nullable=True)
+        customer_name       = Column(String, nullable=True)
+        address             = Column(Text, nullable=True)
+        pm_name             = Column(String, nullable=True)
+        estimator_name      = Column(String, nullable=True)
+        severity            = Column(String, nullable=False)
+        status              = Column(String, nullable=False, default="Open")
+        primary_reason      = Column(String, nullable=True)
+        additional_reasons  = Column(JSON, nullable=True)
+        root_cause          = Column(String, nullable=False, default="Undetermined (default)")
+        reason_notes        = Column(Text, nullable=True)
+        issue_summary       = Column(Text, nullable=True)
+        follow_up_required  = Column(Boolean, nullable=False, default=True)
+        dedup_key           = Column(String, nullable=False)
+        first_message_id    = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
+        latest_message_id   = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
+        created_at          = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        updated_at          = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        closed_at           = Column(DateTime(timezone=True), nullable=True)
+        resolution_reason   = Column(Text, nullable=True)
+        resolved_by         = Column(String, nullable=True)
+        notes               = Column(Text, nullable=True)
+
+    class CaseyFlagEvent(Base):
+        __tablename__ = "casey_flag_events"
+        id         = Column(Integer, primary_key=True, autoincrement=True)
+        flag_id    = Column(Integer, ForeignKey("casey_flags.id"), nullable=False, index=True)
+        event_type = Column(String, nullable=False)  # created | severity_escalated | severity_lowered_by_human |
+                                                       # status_changed | improving_sentiment | note |
+                                                       # reason_changed | notification_planned
+        old_value  = Column(Text, nullable=True)
+        new_value  = Column(Text, nullable=True)
+        actor      = Column(String, nullable=False)  # "casey" or a user name
+        message_id = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
+        created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    class CaseyNotification(Base):
+        __tablename__ = "casey_notifications"
+        __table_args__ = (UniqueConstraint("dedup_key", name="uq_casey_notifications_dedup_key"),)
+        id         = Column(Integer, primary_key=True, autoincrement=True)
+        flag_id    = Column(Integer, ForeignKey("casey_flags.id"), nullable=True)
+        watch_id   = Column(Integer, ForeignKey("casey_response_watches.id"), nullable=True)
+        channel    = Column(String, nullable=False)  # slack_channel | slack_dm | email
+        recipient  = Column(String, nullable=False)
+        severity   = Column(String, nullable=True)
+        dedup_key  = Column(String, nullable=False)
+        status     = Column(String, nullable=False, default="planned")  # planned | sent | suppressed | failed
+        planned_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        sent_at    = Column(DateTime(timezone=True), nullable=True)
+        error      = Column(Text, nullable=True)
+
+    class CaseyResponseWatch(Base):
+        __tablename__ = "casey_response_watches"
+        __table_args__ = (
+            Index("ix_casey_response_watches_thread_id", "thread_id"),
+            Index("ix_casey_response_watches_status", "status"),
+        )
+        id                   = Column(Integer, primary_key=True, autoincrement=True)
+        thread_id            = Column(String, nullable=True)
+        inbound_message_id   = Column(Integer, ForeignKey("customer_messages.id"), nullable=False)
+        job_key              = Column(String, nullable=True)
+        pm_name              = Column(String, nullable=True)
+        customer_email       = Column(String, nullable=True)
+        received_at          = Column(DateTime(timezone=True), nullable=False)
+        due_at               = Column(DateTime(timezone=True), nullable=False)
+        status               = Column(String, nullable=False, default="waiting")  # waiting|responded|overdue|excluded
+        responded_at         = Column(DateTime(timezone=True), nullable=True)
+        response_message_id  = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
+        alert_notification_id = Column(Integer, ForeignKey("casey_notifications.id"), nullable=True)
+
+    class IngestCursor(Base):
+        __tablename__ = "ingest_cursors"
+        source       = Column(String, primary_key=True)
+        cursor_value = Column(Text, nullable=True)
+        updated_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    class WebhookEvent(Base):
+        __tablename__ = "webhook_events"
+        id              = Column(Integer, primary_key=True, autoincrement=True)
+        source          = Column(String, nullable=False)
+        received_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        signature_valid = Column(Boolean, nullable=False)
+        payload         = Column(JSON, nullable=True)
+        processed_at    = Column(DateTime(timezone=True), nullable=True)
+        error           = Column(Text, nullable=True)
 
 
 # --- In-memory fallback stores ---
@@ -300,6 +451,13 @@ def init_db() -> None:
 
             # Dialpad user ID per PM
             conn.execute(text("ALTER TABLE pm_config ADD COLUMN IF NOT EXISTS dialpad_user_id TEXT"))
+            conn.commit()
+
+            # Casey foundations: role-based dashboard access. Existing accounts
+            # default to 'admin' so every login that already worked keeps
+            # working with full access, unchanged.
+            conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin'"))
+            conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS linked_name TEXT"))
             conn.commit()
 
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
@@ -695,7 +853,8 @@ def get_user_by_email(email: str) -> "dict | None":
             r = s.query(DashboardUser).filter_by(email=email.strip().lower()).first()
             if not r:
                 return None
-            return {"id": r.id, "email": r.email, "password_hash": r.password_hash}
+            return {"id": r.id, "email": r.email, "password_hash": r.password_hash,
+                     "role": r.role or "admin", "linked_name": r.linked_name}
     except Exception as e:
         logger.error(f"get_user_by_email: {e}")
         return None
@@ -709,7 +868,8 @@ def get_user_by_id(user_id: int) -> "dict | None":
             r = s.query(DashboardUser).filter_by(id=user_id).first()
             if not r:
                 return None
-            return {"id": r.id, "email": r.email, "password_hash": r.password_hash}
+            return {"id": r.id, "email": r.email, "password_hash": r.password_hash,
+                     "role": r.role or "admin", "linked_name": r.linked_name}
     except Exception as e:
         logger.error(f"get_user_by_id: {e}")
         return None
