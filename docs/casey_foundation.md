@@ -899,3 +899,15 @@ when mocked — the mocks shared the same wrong assumptions):
    9 — 2 new regression tests confirm it.
 
 All three fixes verified against the real API (not mocked).
+
+### Real run against real stored messages (Step 2)
+
+With `casey_analysis_enabled=true` locally: `analyze --limit 10
+--only-matched` on real stored `customer_messages` rows — 10 analyzed,
+10 `ok`, 0 failed, 1 red flag suggested (34,315 input / 6,884 output
+tokens). `process_flags` afterward — 1 flag created (`Medium`,
+`"Scope / change order confusion"`, status `Open`), 3 notifications
+planned (Slack channel + DM + 1 email), all correctly stored
+`status="suppressed"`, `reason="backfill"` (confirmed directly in
+Postgres) since `casey_live_since` is still unset locally. No message
+text was printed anywhere in either command's output.
