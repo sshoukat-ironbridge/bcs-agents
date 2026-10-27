@@ -619,3 +619,22 @@ multipart/alternative, HTML-only, a forwarded thread, an automated
 vendor sender, a quoted reply, an outbound BCS-address message, and a
 message whose From address matches two active jobs (ambiguous). 15 new
 ingestion tests + 20 normalizer tests, 265 total passing.
+
+**`agents/casey/run_watches.py` (Step 4)**: creates a
+`casey_response_watches` row for every stored inbound, non-automated
+customer email with none yet (`due_at = received_at +
+casey_response_window_hours`), then re-evaluates every non-closed
+(`waiting`/`overdue`) watch via the existing
+`response_watch.classify_response()` against outbound Gmail messages in
+the same thread and connected (`duration_ms > 0`) outbound Dialpad
+calls for the same `job_key` (a shared `"job:<job_key>"` sentinel is
+used in place of a real phone number for the call-candidate match,
+since watches don't carry a phone — the same-job filtering already
+happened in the DB query, `get_response_candidates()`). An overdue
+watch plans (never sends) one notification via
+`notification_plan.plan_notifications()` using a synthetic flag
+(`severity="Medium"`, `primary_reason="Lack of communication / no
+updates"` — a watch has no taxonomy classification of its own, so this
+is a fixed, documented default), deduped on `watch:<id>:overdue` so a
+watch is never re-notified. No notifications are ever sent from here —
+rows are stored with `status="planned"` only.

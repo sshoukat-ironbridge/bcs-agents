@@ -1465,3 +1465,178 @@ def upsert_customer_message(row: dict) -> bool:
         logger.error(f"upsert_customer_message({row.get('source')}, {row.get('external_id')}): {e}")
         return False
 
+
+# --- casey_response_watches (agents/casey/run_watches.py) -------------------
+
+def find_unwatched_inbound_messages() -> list[dict]:
+    """Inbound, non-automated customer_messages rows (any source) with no
+    existing casey_response_watches row yet."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            watched_ids = {row[0] for row in s.query(CaseyResponseWatch.inbound_message_id).all()}
+            rows = (
+                s.query(CustomerMessage)
+                .filter(CustomerMessage.direction == "inbound", CustomerMessage.is_automated == False)
+                .all()
+            )
+            return [
+                {
+                    "id": r.id, "thread_id": r.thread_id, "job_key": r.job_key,
+                    "pm_name": r.pm_name, "customer_email": r.customer_email,
+                    "customer_phone": r.customer_phone, "occurred_at": r.occurred_at,
+                }
+                for r in rows if r.id not in watched_ids
+            ]
+    except Exception as e:
+        logger.error(f"find_unwatched_inbound_messages: {e}")
+        return []
+
+
+def create_response_watch(row: dict) -> "int | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            watch = CaseyResponseWatch(
+                thread_id=row.get("thread_id"),
+                inbound_message_id=row["inbound_message_id"],
+                job_key=row.get("job_key"),
+                pm_name=row.get("pm_name"),
+                customer_email=row.get("customer_email"),
+                received_at=row["received_at"],
+                due_at=row["due_at"],
+                status="waiting",
+            )
+            s.add(watch)
+            s.commit()
+            return watch.id
+    except Exception as e:
+        logger.error(f"create_response_watch: {e}")
+        return None
+
+
+def get_open_response_watches() -> list[dict]:
+    """Watches not yet closed — status waiting or overdue (responded and
+    excluded are terminal)."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(CaseyResponseWatch)
+                .filter(CaseyResponseWatch.status.in_(["waiting", "overdue"]))
+                .all()
+            )
+            return [
+                {
+                    "id": r.id, "thread_id": r.thread_id, "inbound_message_id": r.inbound_message_id,
+                    "job_key": r.job_key, "pm_name": r.pm_name, "customer_email": r.customer_email,
+                    "received_at": r.received_at, "due_at": r.due_at, "status": r.status,
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        logger.error(f"get_open_response_watches: {e}")
+        return []
+
+
+def get_response_candidates(thread_id: "str | None", job_key: "str | None") -> list[dict]:
+    """Candidate responses for response_watch.classify_response(): every
+    outbound Gmail message in the same thread, plus every connected
+    (duration_ms > 0) outbound Dialpad call tied to the same job_key."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            candidates: list[dict] = []
+            if thread_id:
+                gmail_rows = (
+                    s.query(CustomerMessage)
+                    .filter(
+                        CustomerMessage.source == "gmail",
+                        CustomerMessage.direction == "outbound",
+                        CustomerMessage.thread_id == thread_id,
+                    )
+                    .all()
+                )
+                candidates.extend(
+                    {"source": "gmail", "direction": "outbound", "thread_id": r.thread_id,
+                     "occurred_at": r.occurred_at}
+                    for r in gmail_rows
+                )
+            if job_key:
+                call_rows = (
+                    s.query(CustomerMessage)
+                    .filter(
+                        CustomerMessage.source == "dialpad_call",
+                        CustomerMessage.direction == "outbound",
+                        CustomerMessage.job_key == job_key,
+                        CustomerMessage.duration_ms > 0,
+                    )
+                    .all()
+                )
+                candidates.extend(
+                    {"source": "dialpad_call", "direction": "outbound", "job_key": r.job_key,
+                     "occurred_at": r.occurred_at, "duration_ms": r.duration_ms, "message_id": r.id}
+                    for r in call_rows
+                )
+            return candidates
+    except Exception as e:
+        logger.error(f"get_response_candidates: {e}")
+        return []
+
+
+def update_response_watch(watch_id: int, status: str, responded_at=None, response_message_id=None) -> None:
+    if not _db_available:
+        return
+    try:
+        with _Session() as s:
+            row = s.query(CaseyResponseWatch).filter_by(id=watch_id).first()
+            if not row:
+                return
+            row.status = status
+            if responded_at is not None:
+                row.responded_at = responded_at
+            if response_message_id is not None:
+                row.response_message_id = response_message_id
+            s.commit()
+    except Exception as e:
+        logger.error(f"update_response_watch({watch_id}): {e}")
+
+
+# --- casey_notifications (planning only — never sent from here) ------------
+
+def create_notification(row: dict) -> "int | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            notification = CaseyNotification(
+                flag_id=row.get("flag_id"),
+                watch_id=row.get("watch_id"),
+                channel=row["channel"],
+                recipient=row["recipient"],
+                severity=row.get("severity"),
+                dedup_key=row["dedup_key"],
+                status=row.get("status", "planned"),
+            )
+            s.add(notification)
+            s.commit()
+            return notification.id
+    except Exception as e:
+        logger.error(f"create_notification(dedup_key={row.get('dedup_key')}): {e}")
+        return None
+
+
+def notification_exists(dedup_key: str) -> bool:
+    if not _db_available:
+        return False
+    try:
+        with _Session() as s:
+            return s.query(CaseyNotification).filter_by(dedup_key=dedup_key).first() is not None
+    except Exception as e:
+        logger.error(f"notification_exists({dedup_key}): {e}")
+        return False
+
