@@ -4,12 +4,29 @@ No network/DB access — callers own the actual API calls; this module only
 decides which window to fetch next and loops a caller-supplied page
 fetcher with a hard cap.
 """
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 DEFAULT_OVERLAP_MINUTES = 5
 DEFAULT_LOOKBACK_HOURS = 24
 DEFAULT_MAX_PAGES = 50
+
+_SINCE_RE = re.compile(r"^(\d+)([dhm])$")
+
+
+def parse_since(value: str) -> timedelta:
+    """Parses a CLI --since value like "7d", "12h", "30m" into a
+    timedelta. Shared by every ingestion agent's --since flag."""
+    m = _SINCE_RE.match(value.strip())
+    if not m:
+        raise ValueError(f"--since must look like '7d', '12h', or '30m', got {value!r}")
+    n, unit = int(m.group(1)), m.group(2)
+    if unit == "d":
+        return timedelta(days=n)
+    if unit == "h":
+        return timedelta(hours=n)
+    return timedelta(minutes=n)
 
 
 def parse_cursor(cursor_value: "str | None") -> "datetime | None":

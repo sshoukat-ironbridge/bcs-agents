@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from agents.casey.ingest_windows import parse_cursor, next_window, paginate
+from agents.casey.ingest_windows import parse_cursor, next_window, paginate, parse_since
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
 
@@ -78,3 +78,15 @@ def test_paginate_never_calls_fetch_page_itself_makes_no_network_call():
 
     paginate(fetch_page, start_cursor="abc")
     assert seen_cursors == ["abc"]
+
+
+def test_parse_since_formats():
+    assert parse_since("7d") == timedelta(days=7)
+    assert parse_since("12h") == timedelta(hours=12)
+    assert parse_since("30m") == timedelta(minutes=30)
+
+
+def test_parse_since_rejects_bad_format():
+    import pytest
+    with pytest.raises(ValueError):
+        parse_since("7 days")

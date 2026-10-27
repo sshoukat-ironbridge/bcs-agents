@@ -9,32 +9,18 @@ invocation, with or without --dry-run, always proceeds regardless of that
 flag.
 """
 import argparse
-import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from utils.logger import get_logger
+from agents.casey.ingest_windows import parse_since as _parse_since
 
 logger = get_logger("casey.ingest_dialpad")
 
 DEFAULT_TRANSCRIPT_LAG_MINUTES = 60
 DEFAULT_OVERLAP_HOURS = 2
 INGEST_SOURCE = "dialpad_call"
-
-_SINCE_RE = re.compile(r"^(\d+)([dhm])$")
-
-
-def _parse_since(value: str) -> timedelta:
-    m = _SINCE_RE.match(value.strip())
-    if not m:
-        raise ValueError(f"--since must look like '7d', '12h', or '30m', got {value!r}")
-    n, unit = int(m.group(1)), m.group(2)
-    if unit == "d":
-        return timedelta(days=n)
-    if unit == "h":
-        return timedelta(hours=n)
-    return timedelta(minutes=n)
 
 
 def is_enabled() -> bool:
