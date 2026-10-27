@@ -257,3 +257,78 @@ hardcoded). All 9 Casey tables exist. Of 176 active jobs: 32 missing PM,
 0 missing estimator, 18 missing email, 21 missing phone, and 176 missing
 address (expected — no sync has run since the `address` column was added
 in Step 7a; the next OCA sync backfills it from the sheet).
+
+## Summary (Step 12)
+
+### Schema overview
+
+Casey reads `casey_active_jobs` (OCA's table) **read-only**, and owns nine
+tables of its own: `customer_messages`, `message_analyses`, `casey_flags`,
+`casey_flag_events`, `casey_notifications`, `casey_response_watches`,
+`ingest_cursors`, `webhook_events`, plus a `role`/`linked_name` extension
+to the existing `dashboard_users` table. See "Schema (Step 7)" above for
+the dedup/uniqueness details.
+
+### Pure modules
+
+`agents/casey/`: `taxonomy.py` (constants), `access.py` (role visibility),
+`flag_logic.py` (dedupe/escalate decision), `notification_plan.py` (plan,
+never send), `response_watch.py` (24h window classification),
+`normalizers.py` (Dialpad/Gmail → row dicts, job matching),
+`ingest_windows.py` (fetch window + capped pagination), `calibration.py`
+(golden-set loader). All DB/network-free, all unit tested.
+
+### Decisions and assumptions (consolidated)
+
+- **Tatiana's email tier**: doc prose says High, doc table says Medium.
+  Defaulted to the table (Medium, High, Critical all include Tatiana),
+  configurable via `notification_plan.plan_notifications`'s `email_matrix`
+  parameter. (Step 8c)
+- **Response window**: 24 **consecutive calendar hours**, not business
+  hours, configurable via `casey_response_window_hours` (default `"24"`).
+  (Step 8d)
+- **Composite project key**: `job_key` = `client_name|sheet_tab|
+  primary_job_type` everywhere (messages, flags, notifications, watches),
+  because `casey_active_jobs` has no single stable ID that survives a
+  client's job being re-keyed. Used until BCS has a real per-job unique ID.
+  (Step 7)
+- **Permits tab**: `integrations/sheets.py::get_active_jobs()` only reads
+  the "To Start" and "In Process" tabs — there is no "Permits" tab in the
+  live sheet today, so it's skipped (pre-existing behavior, confirmed
+  while building the Casey schema, not changed).
+- **Webhook signature method**: confirmed JWT + shared secret (Dialpad's
+  own docs); the **signing algorithm (HS256) is assumed, not confirmed**.
+  (Step 9)
+- **SMS as a qualifying response**: off by default
+  (`casey_sms_counts_as_response = "false"`), opt-in via config. (Step 8d)
+- **Recipient email defaults**: `casey_email_ana_maria`,
+  `casey_email_tatiana`, `casey_email_chris` all default to **empty
+  string** — never a real address in code or tests — plus
+  `casey_email_override` to redirect every email locally. (Step 8c)
+- **`get_summary()["total"]`**: kept counting every row (retired included)
+  rather than changing to a non-retired filter, to avoid an incidental
+  behaviour change outside the cleanup's scope. (Step 2, Part 1)
+- **Dashboard roles added to the existing `dashboard_users` table**, not a
+  new table, since auth there was already per-account (not a shared
+  credential) and just lacked a role concept; existing accounts default to
+  `role = 'admin'` so nothing that could already log in loses access.
+  (Step 7j)
+
+### Still needs confirmation
+
+- **Dialpad webhook JWT signing algorithm** — assumed HS256; confirm with
+  Dialpad support or a real captured webhook before relying on it in
+  production.
+- **Dialpad SMS webhook field names** beyond what's implemented — the
+  normalizer matches the documented schema exactly
+  (https://developers.dialpad.com/docs/sms-events.md), but that page could
+  change; re-check before go-live.
+- **Tatiana's actual email tier** (Medium vs. High) — needs a decision
+  from Chris; currently defaults to the doc's table.
+- **`dashboard_users.role` values for existing accounts** — all default to
+  `admin` on migration; whoever owns user management should confirm which
+  real accounts should be reassigned to `pm`/`estimator`/`leadership`/
+  `cx_coordinator` (no UI for this yet).
+- **Ambiguous contacts** (8 emails, 7 phones shared by more than one job
+  locally) will never auto-match once ingestion is built — needs a human
+  process (or sheet data cleanup) for those specific clients.
