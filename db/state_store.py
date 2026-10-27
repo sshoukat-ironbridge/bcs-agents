@@ -175,10 +175,16 @@ if _db_available:
         is_strong_praise     = Column(Boolean, nullable=False, default=False)
         red_flag_suggested   = Column(Boolean, nullable=True)
         suggested_severity   = Column(String, nullable=True)
-        suggested_reasons    = Column(JSON, nullable=True)
+        suggested_primary_reason = Column(String, nullable=True)
+        suggested_reasons    = Column(JSON, nullable=True)  # additional_reasons list
+        reason_notes         = Column(Text, nullable=True)
         suggested_root_cause = Column(String, nullable=True)
         summary              = Column(Text, nullable=True)
         evidence_quote       = Column(Text, nullable=True)
+        same_complaint_as_open_flag = Column(Boolean, nullable=True)
+        trajectory           = Column(String, nullable=True)  # improving | stable | worsening | unknown
+        confidence           = Column(Float, nullable=True)
+        status               = Column(String, nullable=False, default="ok")  # ok | failed
         raw_json             = Column(JSON, nullable=True)
         created_at           = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -514,6 +520,18 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_notifications ADD COLUMN IF NOT EXISTS reason TEXT"))
             conn.commit()
 
+            # Stage 7: analysis engine output fields on message_analyses.
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS suggested_primary_reason TEXT"))
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS reason_notes TEXT"))
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS same_complaint_as_open_flag BOOLEAN"))
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS trajectory TEXT"))
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS confidence REAL"))
+            conn.execute(text("ALTER TABLE message_analyses ADD COLUMN IF NOT EXISTS status TEXT"))
+            conn.execute(text("UPDATE message_analyses SET status = 'ok' WHERE status IS NULL"))
+            conn.execute(text("ALTER TABLE message_analyses ALTER COLUMN status SET DEFAULT 'ok'"))
+            conn.execute(text("ALTER TABLE message_analyses ALTER COLUMN status SET NOT NULL"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -590,6 +608,14 @@ def init_db() -> None:
                 # of planned. Unset until explicitly set at go-live — see
                 # docs/casey_foundation.md for how to set it.
                 "casey_live_since": "",
+                # Analysis engine (integrations/anthropic_client.py,
+                # agents/casey/analyze.py). Off by default - a scheduled
+                # run checks this; an explicit CLI invocation always runs.
+                "casey_analysis_enabled": "false",
+                "casey_model": "claude-sonnet-5-5",
+                "casey_max_tokens": "1024",
+                # How much message history to feed the model per analysis.
+                "casey_history_messages": "10",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -1691,4 +1717,181 @@ def notification_exists(dedup_key: str) -> bool:
     except Exception as e:
         logger.error(f"notification_exists({dedup_key}): {e}")
         return False
+
+
+# --- Analysis engine (agents/casey/analyze.py) ------------------------------
+
+def _customer_message_to_dict(r) -> dict:
+    return {
+        "id": r.id, "source": r.source, "external_id": r.external_id, "thread_id": r.thread_id,
+        "job_id": r.job_id, "job_key": r.job_key, "customer_email": r.customer_email,
+        "customer_phone": r.customer_phone, "direction": r.direction, "occurred_at": r.occurred_at,
+        "sender": r.sender, "subject": r.subject, "body_text": r.body_text or "",
+        "is_automated": r.is_automated, "pm_name": r.pm_name, "estimator_name": r.estimator_name,
+    }
+
+
+def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[dict]:
+    """Inbound, non-automated customer_messages rows with no
+    message_analyses row yet, oldest first (deterministic FIFO), capped
+    at `limit`. only_matched=True restricts to rows with a resolved
+    job_id (never analyzes a message Casey can't tie to a project)."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            analyzed_ids = {row[0] for row in s.query(MessageAnalysis.message_id).all()}
+            q = s.query(CustomerMessage).filter(
+                CustomerMessage.direction == "inbound",
+                CustomerMessage.is_automated == False,
+            )
+            if only_matched:
+                q = q.filter(CustomerMessage.job_id.isnot(None))
+            q = q.order_by(CustomerMessage.occurred_at.asc())
+            rows = [r for r in q.all() if r.id not in analyzed_ids]
+            return [_customer_message_to_dict(r) for r in rows[:limit]]
+    except Exception as e:
+        logger.error(f"get_messages_to_analyze: {e}")
+        return []
+
+
+def get_message_history(job_key: "str | None", before, limit: int = 10, since_days: int = 60) -> list[dict]:
+    """Up to `limit` customer_messages for the same job_key, occurring in
+    [before - since_days, before), oldest first, each paired with its
+    latest analysis's sentiment/summary (None if not yet analyzed)."""
+    if not _db_available or not job_key:
+        return []
+    try:
+        with _Session() as s:
+            cutoff = before - timedelta(days=since_days)
+            rows = (
+                s.query(CustomerMessage)
+                .filter(
+                    CustomerMessage.job_key == job_key,
+                    CustomerMessage.occurred_at < before,
+                    CustomerMessage.occurred_at >= cutoff,
+                )
+                .order_by(CustomerMessage.occurred_at.desc())
+                .limit(limit)
+                .all()
+            )
+            rows = list(reversed(rows))  # oldest first
+            message_ids = [r.id for r in rows]
+            analyses = {}
+            if message_ids:
+                for a in (
+                    s.query(MessageAnalysis)
+                    .filter(MessageAnalysis.message_id.in_(message_ids))
+                    .order_by(MessageAnalysis.created_at.asc())
+                    .all()
+                ):
+                    analyses[a.message_id] = a  # last one wins if re-analyzed
+            return [
+                {
+                    "id": r.id, "occurred_at": r.occurred_at,
+                    "sentiment": (analyses.get(r.id).sentiment if r.id in analyses else None),
+                    "summary": (analyses.get(r.id).summary if r.id in analyses else None),
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        logger.error(f"get_message_history({job_key}): {e}")
+        return []
+
+
+def get_open_flag_for_job(job_key: "str | None") -> "dict | None":
+    if not _db_available or not job_key:
+        return None
+    try:
+        with _Session() as s:
+            row = (
+                s.query(CaseyFlag)
+                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None))
+                .order_by(CaseyFlag.created_at.desc())
+                .first()
+            )
+            if not row:
+                return None
+            return {
+                "id": row.id, "severity": row.severity, "primary_reason": row.primary_reason,
+                "issue_summary": row.issue_summary, "dedup_key": row.dedup_key,
+            }
+    except Exception as e:
+        logger.error(f"get_open_flag_for_job({job_key}): {e}")
+        return None
+
+
+def save_analysis(row: dict) -> "int | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            analysis = MessageAnalysis(
+                message_id=row["message_id"],
+                model=row.get("model"),
+                prompt_version=row.get("prompt_version"),
+                sentiment=row.get("sentiment"),
+                sentiment_score=row.get("sentiment_score"),
+                is_strong_praise=row.get("is_strong_praise", False),
+                red_flag_suggested=row.get("red_flag_suggested"),
+                suggested_severity=row.get("suggested_severity"),
+                suggested_primary_reason=row.get("suggested_primary_reason"),
+                suggested_reasons=row.get("suggested_reasons"),
+                reason_notes=row.get("reason_notes"),
+                suggested_root_cause=row.get("suggested_root_cause"),
+                summary=row.get("summary"),
+                evidence_quote=row.get("evidence_quote"),
+                same_complaint_as_open_flag=row.get("same_complaint_as_open_flag"),
+                trajectory=row.get("trajectory"),
+                confidence=row.get("confidence"),
+                status=row.get("status", "ok"),
+                raw_json=row.get("raw_json"),
+            )
+            s.add(analysis)
+            s.commit()
+            return analysis.id
+    except Exception as e:
+        logger.error(f"save_analysis(message_id={row.get('message_id')}): {e}")
+        return None
+
+
+def get_unprocessed_analyses() -> list[dict]:
+    """message_analyses rows with red_flag_suggested=True, status="ok",
+    that haven't yet produced a casey_flag_event (agents/casey/
+    process_flags.py tracks "processed" via a flag_event referencing the
+    message_id)."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            processed_message_ids = {
+                row[0] for row in s.query(CaseyFlagEvent.message_id).filter(CaseyFlagEvent.message_id.isnot(None)).all()
+            }
+            rows = (
+                s.query(MessageAnalysis)
+                .filter(MessageAnalysis.red_flag_suggested == True, MessageAnalysis.status == "ok")  # noqa: E712
+                .order_by(MessageAnalysis.created_at.asc())
+                .all()
+            )
+            result = []
+            for a in rows:
+                if a.message_id in processed_message_ids:
+                    continue
+                message = s.query(CustomerMessage).filter_by(id=a.message_id).first()
+                if not message:
+                    continue
+                result.append({
+                    "analysis_id": a.id, "message_id": a.message_id,
+                    "job_id": message.job_id, "job_key": message.job_key,
+                    "customer_name": message.customer_email, "pm_name": message.pm_name,
+                    "estimator_name": message.estimator_name,
+                    "severity": a.suggested_severity, "primary_reason": a.suggested_primary_reason,
+                    "additional_reasons": a.suggested_reasons or [], "root_cause": a.suggested_root_cause,
+                    "reason_notes": a.reason_notes, "issue_summary": a.summary,
+                    "sentiment": a.sentiment, "occurred_at": message.occurred_at,
+                })
+            return result
+    except Exception as e:
+        logger.error(f"get_unprocessed_analyses: {e}")
+        return []
 
