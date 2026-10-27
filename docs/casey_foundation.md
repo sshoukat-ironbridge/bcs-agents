@@ -89,6 +89,17 @@ cleanup). Full test suite: 82 passed.
 
 ## Part 2: Casey foundations
 
+### Taxonomy (Step 6)
+
+`agents/casey/taxonomy.py` holds the severities, statuses, reasons and root
+causes verbatim from Chris's v1.3 doc, plus:
+- `severity_rank()` for ordered comparison (Low < Medium < High < Critical).
+- `SEVERITY_GUIDE`: the interpretive text per severity, for later prompts.
+- `validate_reasons()`: enforces "Other (explain in Notes)" requiring
+  non-empty notes, whether it's the primary reason or among the additional
+  reasons.
+- `default_root_cause()`: always `"Undetermined (default)"`.
+
 ### Dashboard auth audit (Step 7j)
 
 Today's auth is **not** a single shared credential: `dashboard_users` is a
@@ -235,13 +246,14 @@ calibration.py::load_calibration_set()` validates the file shape and that
 every `expected_severity` is one of `SEVERITIES`. No LLM calls yet; this
 set is for evaluating the severity-classification prompt once it exists.
 
-### Taxonomy (Step 6)
+### Readiness check (Step 11)
 
-`agents/casey/taxonomy.py` holds the severities, statuses, reasons and root
-causes verbatim from Chris's v1.3 doc, plus:
-- `severity_rank()` for ordered comparison (Low < Medium < High < Critical).
-- `SEVERITY_GUIDE`: the interpretive text per severity, for later prompts.
-- `validate_reasons()`: enforces "Other (explain in Notes)" requiring
-  non-empty notes, whether it's the primary reason or among the additional
-  reasons.
-- `default_root_cause()`: always `"Undetermined (default)"`.
+`scripts/casey_readiness.py` prints configuration status (set/not set,
+never values), table existence + row counts, and active-job data gaps —
+no external API calls. Run live against the local DB: Dialpad API key,
+Gmail service account, and Slack channel are configured; the webhook
+secret and all three recipient emails are not (expected locally — never
+hardcoded). All 9 Casey tables exist. Of 176 active jobs: 32 missing PM,
+0 missing estimator, 18 missing email, 21 missing phone, and 176 missing
+address (expected — no sync has run since the `address` column was added
+in Step 7a; the next OCA sync backfills it from the sheet).
