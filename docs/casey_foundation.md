@@ -566,3 +566,25 @@ transcript was ever fetched for a 0-duration call, confirmed live).
   (`app_config`, JSON list), defaulting to **only** the currently
   configured `notification_sender_email` mailbox — never defaults to
   any PM's own mailbox.
+
+**`integrations/gmail_read.py` (Step 2)**: exposes only
+`list_messages()`/`get_message()`/`get_thread()`, internally calling
+only `users().messages().list/.get` and `users().threads().get` — no
+send/modify/delete/label method appears anywhere in the module
+(enforced by a test that greps the module source). Timeouts (15s) via
+an `AuthorizedHttp`-wrapped `httplib2.Http`; 429/5xx retried 3 tries
+with 2s/5s backoff; logs counts and message/thread ids only, never
+subject or body text.
+
+**Scope — LIVE-CHECKED, downgraded from the plan**: tried the narrower
+`gmail.readonly` scope first; it failed live with `unauthorized_client`
+at token refresh — the service account's Google Workspace domain-wide
+delegation is authorized **only** for `https://mail.google.com/` (the
+scope the existing send path already uses), not `gmail.readonly`.
+Falls back to that already-authorized scope; the read-only guarantee
+is therefore enforced at the **code level** (this module never calls a
+send/modify/delete/label method) rather than at the **credential**
+level. Revisit if a Workspace admin ever authorizes `gmail.readonly`
+for this client ID. Verified live against the real
+`chris.s@bluecollarscholars.net` mailbox: `list_messages()` and
+`get_message()` both work and return real headers/`internalDate`.
