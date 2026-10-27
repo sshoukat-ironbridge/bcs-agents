@@ -2,8 +2,11 @@
 plus a pure contact-based job matcher. No network/DB access — callers
 fetch the raw payload and pass it in here.
 """
+import base64
 import json
+import re
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from typing import Any
 
 # Company domain used to classify Gmail message direction (outbound = we
@@ -14,6 +17,106 @@ OUR_EMAIL_DOMAIN = "bluecollarscholars.net"
 _AUTOMATED_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "mailer-daemon"}
 _BCS_UPDATE_SUBJECT_PREFIX = "[BCS Update]"
 _BULK_PRECEDENCE_VALUES = {"bulk", "list", "junk"}
+
+MAX_GMAIL_BODY_CHARS = 8000
+
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+# A line matching any of these ends the kept body — everything from here
+# down is a quoted reply or a signature, not part of this message.
+_QUOTE_OR_SIGNATURE_STOP_PATTERNS = [
+    re.compile(r"^>"),
+    re.compile(r"^On .+ wrote:\s*$", re.I),
+    re.compile(r"^-{2,}\s*Original Message\s*-{0,}", re.I),
+    re.compile(r"^-- ?$"),
+    re.compile(r"^Sent from my (iPhone|iPad|Android|mobile device)\b", re.I),
+]
+
+
+def _parse_address_list(header_value: str) -> list[str]:
+    """Extracts every email address out of a To/Cc header value, tolerant
+    of "Name <addr>, Name2 <addr2>" formatting and commas inside display
+    names (it matches addresses directly rather than splitting on commas)."""
+    return [m.lower() for m in _EMAIL_RE.findall(header_value or "")]
+
+
+def _strip_quoted_and_signature(text: str) -> str:
+    kept = []
+    for line in text.splitlines():
+        if any(p.match(line.strip()) for p in _QUOTE_OR_SIGNATURE_STOP_PATTERNS):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data):
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _HTMLTextExtractor()
+    try:
+        parser.feed(html)
+    except Exception:
+        pass
+    return parser.get_text()
+
+
+def _decode_part_data(data: str) -> str:
+    """Gmail API part bodies are base64url-encoded (possibly unpadded)."""
+    if not data:
+        return ""
+    padded = data + "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _walk_mime_parts(payload: dict):
+    """Yields every leaf MIME part (depth-first) of a Gmail message payload."""
+    if not payload:
+        return
+    parts = payload.get("parts")
+    if parts:
+        for part in parts:
+            yield from _walk_mime_parts(part)
+    else:
+        yield payload
+
+
+def extract_gmail_body_text(payload: dict) -> str:
+    """Prefers the text/plain part; falls back to stripping HTML out of
+    text/html. Removes quoted replies and signatures, caps at
+    MAX_GMAIL_BODY_CHARS."""
+    plain_text = None
+    html_text = None
+    for part in _walk_mime_parts(payload):
+        data = (part.get("body") or {}).get("data")
+        if not data:
+            continue
+        mime_type = part.get("mimeType", "")
+        if mime_type == "text/plain" and plain_text is None:
+            plain_text = _decode_part_data(data)
+        elif mime_type == "text/html" and html_text is None:
+            html_text = _decode_part_data(data)
+
+    if plain_text is not None:
+        raw_text = plain_text
+    elif html_text is not None:
+        raw_text = _html_to_text(html_text)
+    else:
+        raw_text = ""
+
+    return _strip_quoted_and_signature(raw_text)[:MAX_GMAIL_BODY_CHARS]
 
 
 # --- Dialpad call transcript -> customer_messages row ----------------------
@@ -130,7 +233,16 @@ def is_automated_email(headers: dict, subject: str, sender: str) -> bool:
 
 def normalize_gmail_message(message: dict) -> dict:
     """message: a Gmail API message resource {"id", "threadId", "payload":
-    {"headers": [...]}, "snippet", "internalDate" (ms epoch, UTC)}."""
+    {"headers": [...], "parts"/"body"}, "snippet", "internalDate" (ms
+    epoch, UTC)}.
+
+    body_text prefers text/plain, else strips HTML from text/html, with
+    quoted replies/signatures removed and an 8000-char cap (falls back to
+    the API's own "snippet" if the payload has no readable part at all —
+    e.g. a minimal/legacy fixture). to_addresses/cc_addresses are every
+    email address parsed out of the To/Cc headers, for the caller to
+    determine the customer address on an outbound message.
+    """
     headers = _header_map((message.get("payload") or {}).get("headers"))
     sender = headers.get("from", "")
     subject = headers.get("subject", "")
@@ -141,6 +253,10 @@ def normalize_gmail_message(message: dict) -> dict:
         if internal_date else None
     )
 
+    body_text = extract_gmail_body_text(message.get("payload") or {})
+    if not body_text:
+        body_text = message.get("snippet", "")
+
     return {
         "source": "gmail",
         "external_id": message.get("id"),
@@ -148,7 +264,9 @@ def normalize_gmail_message(message: dict) -> dict:
         "direction": "outbound" if _sender_domain(sender) == OUR_EMAIL_DOMAIN else "inbound",
         "sender": sender,
         "subject": subject,
-        "body_text": message.get("snippet", ""),
+        "to_addresses": _parse_address_list(headers.get("to", "")),
+        "cc_addresses": _parse_address_list(headers.get("cc", "")),
+        "body_text": body_text,
         "occurred_at": occurred_at,
         "is_automated": is_automated_email(headers, subject, sender),
         "raw_ref": json.dumps(message),

@@ -5,6 +5,7 @@ from pathlib import Path
 from agents.casey.normalizers import (
     normalize_dialpad_transcript, normalize_gmail_message, normalize_dialpad_sms,
     is_automated_email, build_contact_index, match_job, count_ambiguous_contacts,
+    extract_gmail_body_text, _parse_address_list,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "casey"
@@ -98,6 +99,97 @@ def test_is_automated_email_rules_directly():
     assert is_automated_email({}, "hi", "donotreply@example.com") is True
     assert is_automated_email({}, "[BCS Update] hello", "pm@example.com") is True
     assert is_automated_email({}, "hello", "pm@example.com") is False
+
+
+def _b64(text):
+    import base64
+    return base64.urlsafe_b64encode(text.encode()).decode()
+
+
+def test_extract_body_prefers_text_plain_over_html():
+    payload = {"parts": [
+        {"mimeType": "text/html", "body": {"data": _b64("<p>HTML version</p>")}},
+        {"mimeType": "text/plain", "body": {"data": _b64("Plain version")}},
+    ]}
+    assert extract_gmail_body_text(payload) == "Plain version"
+
+
+def test_extract_body_falls_back_to_html_stripped():
+    payload = {"parts": [
+        {"mimeType": "text/html", "body": {"data": _b64("<p>Hello <b>there</b></p>")}},
+    ]}
+    assert extract_gmail_body_text(payload) == "Hello there"
+
+
+def test_extract_body_strips_quoted_reply():
+    text = "Thanks for the update.\n\nOn Mon, Oct 20, 2026 at 3:00 PM Jane Doe <jane@example.com> wrote:\n> original message text"
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    result = extract_gmail_body_text(payload)
+    assert result == "Thanks for the update."
+    assert "original message text" not in result
+
+
+def test_extract_body_strips_original_message_marker():
+    text = "My reply here.\n-----Original Message-----\nFrom: someone"
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    result = extract_gmail_body_text(payload)
+    assert result == "My reply here."
+
+
+def test_extract_body_strips_signature_separator():
+    text = "See you then.\n-- \nJohn Smith\nSenior PM"
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    assert extract_gmail_body_text(payload) == "See you then."
+
+
+def test_extract_body_strips_sent_from_mobile():
+    text = "Sounds good.\nSent from my iPhone"
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    assert extract_gmail_body_text(payload) == "Sounds good."
+
+
+def test_extract_body_caps_at_max_chars():
+    text = "x" * 10000
+    payload = {"parts": [{"mimeType": "text/plain", "body": {"data": _b64(text)}}]}
+    result = extract_gmail_body_text(payload)
+    assert len(result) == 8000
+
+
+def test_extract_body_nested_multipart_alternative():
+    payload = {"parts": [
+        {"mimeType": "multipart/alternative", "parts": [
+            {"mimeType": "text/plain", "body": {"data": _b64("Nested plain text")}},
+            {"mimeType": "text/html", "body": {"data": _b64("<p>Nested HTML</p>")}},
+        ]},
+    ]}
+    assert extract_gmail_body_text(payload) == "Nested plain text"
+
+
+def test_extract_body_empty_payload_returns_empty():
+    assert extract_gmail_body_text({}) == ""
+
+
+def test_normalize_gmail_message_falls_back_to_snippet_when_no_parts():
+    message = _load("gmail_message_inbound.json")  # no payload.parts/body
+    row = normalize_gmail_message(message)
+    assert row["body_text"] == message["snippet"]
+
+
+def test_parse_address_list_handles_multiple_and_display_names():
+    header = 'Jane Doe <jane@example.com>, "Smith, John" <john@example.com>'
+    assert _parse_address_list(header) == ["jane@example.com", "john@example.com"]
+
+
+def test_parse_address_list_empty():
+    assert _parse_address_list("") == []
+    assert _parse_address_list(None) == []
+
+
+def test_normalize_gmail_message_exposes_to_and_cc():
+    message = _load("gmail_message_inbound.json")
+    row = normalize_gmail_message(message)
+    assert row["to_addresses"] == ["chris.s@bluecollarscholars.net"]
+    assert row["cc_addresses"] == []
 
 
 # --- Dialpad SMS webhook -------------------------------------------------------
