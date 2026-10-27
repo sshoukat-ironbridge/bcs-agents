@@ -227,7 +227,9 @@ if _db_available:
     class CaseyFlagEvent(Base):
         __tablename__ = "casey_flag_events"
         id         = Column(Integer, primary_key=True, autoincrement=True)
-        flag_id    = Column(Integer, ForeignKey("casey_flags.id"), nullable=False, index=True)
+        # Nullable: a "no_op" analysis (no flag created or matched) still
+        # gets an event so get_unprocessed_analyses() marks it processed.
+        flag_id    = Column(Integer, ForeignKey("casey_flags.id"), nullable=True, index=True)
         event_type = Column(String, nullable=False)  # created | severity_escalated | severity_lowered_by_human |
                                                        # status_changed | improving_sentiment | note |
                                                        # reason_changed | notification_planned
@@ -530,6 +532,10 @@ def init_db() -> None:
             conn.execute(text("UPDATE message_analyses SET status = 'ok' WHERE status IS NULL"))
             conn.execute(text("ALTER TABLE message_analyses ALTER COLUMN status SET DEFAULT 'ok'"))
             conn.execute(text("ALTER TABLE message_analyses ALTER COLUMN status SET NOT NULL"))
+            conn.commit()
+
+            # Stage 7: a "no_op" analysis event has no flag to attach to.
+            conn.execute(text("ALTER TABLE casey_flag_events ALTER COLUMN flag_id DROP NOT NULL"))
             conn.commit()
 
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
@@ -1894,4 +1900,111 @@ def get_unprocessed_analyses() -> list[dict]:
     except Exception as e:
         logger.error(f"get_unprocessed_analyses: {e}")
         return []
+
+
+# --- casey_flags / casey_flag_events (agents/casey/process_flags.py) -------
+
+def _flag_to_dict(r) -> dict:
+    return {
+        "id": r.id, "job_id": r.job_id, "job_key": r.job_key, "customer_name": r.customer_name,
+        "address": r.address, "pm_name": r.pm_name, "estimator_name": r.estimator_name,
+        "severity": r.severity, "status": r.status, "primary_reason": r.primary_reason,
+        "additional_reasons": r.additional_reasons or [], "root_cause": r.root_cause,
+        "reason_notes": r.reason_notes, "issue_summary": r.issue_summary,
+        "follow_up_required": r.follow_up_required, "dedup_key": r.dedup_key,
+        "first_message_id": r.first_message_id, "latest_message_id": r.latest_message_id,
+        "created_at": r.created_at, "updated_at": r.updated_at, "closed_at": r.closed_at,
+    }
+
+
+def get_open_flags_for_job(job_key: "str | None") -> list[dict]:
+    """Every non-closed flag for this job — there can be more than one
+    at once, one per distinct underlying complaint (create_separate)."""
+    if not _db_available or not job_key:
+        return []
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(CaseyFlag)
+                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None))
+                .order_by(CaseyFlag.created_at.asc())
+                .all()
+            )
+            return [_flag_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"get_open_flags_for_job({job_key}): {e}")
+        return []
+
+
+def get_flag_by_id(flag_id: "int | None") -> "dict | None":
+    if not _db_available or flag_id is None:
+        return None
+    try:
+        with _Session() as s:
+            row = s.query(CaseyFlag).filter_by(id=flag_id).first()
+            return _flag_to_dict(row) if row else None
+    except Exception as e:
+        logger.error(f"get_flag_by_id({flag_id}): {e}")
+        return None
+
+
+def create_flag_row(row: dict) -> "int | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            flag = CaseyFlag(
+                job_id=row.get("job_id"), job_key=row.get("job_key"),
+                customer_name=row.get("customer_name"), address=row.get("address"),
+                pm_name=row.get("pm_name"), estimator_name=row.get("estimator_name"),
+                severity=row["severity"], status=row.get("status", "Open"),
+                primary_reason=row.get("primary_reason"), additional_reasons=row.get("additional_reasons") or [],
+                root_cause=row.get("root_cause", "Undetermined (default)"), reason_notes=row.get("reason_notes"),
+                issue_summary=row.get("issue_summary"), follow_up_required=row.get("follow_up_required", True),
+                dedup_key=row["dedup_key"], first_message_id=row.get("first_message_id"),
+                latest_message_id=row.get("latest_message_id"),
+            )
+            s.add(flag)
+            s.commit()
+            return flag.id
+    except Exception as e:
+        logger.error(f"create_flag_row(dedup_key={row.get('dedup_key')}): {e}")
+        return None
+
+
+def update_flag_row(flag_id: int, **fields) -> None:
+    """Updates whichever columns are passed (e.g. severity=..., status=...,
+    latest_message_id=...). updated_at is always bumped."""
+    if not _db_available:
+        return
+    try:
+        with _Session() as s:
+            row = s.query(CaseyFlag).filter_by(id=flag_id).first()
+            if not row:
+                return
+            for key, value in fields.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+            row.updated_at = datetime.now(timezone.utc)
+            s.commit()
+    except Exception as e:
+        logger.error(f"update_flag_row({flag_id}): {e}")
+
+
+def create_flag_event(row: dict) -> "int | None":
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            event = CaseyFlagEvent(
+                flag_id=row.get("flag_id"), event_type=row["event_type"],
+                old_value=row.get("old_value"), new_value=row.get("new_value"),
+                actor=row.get("actor", "casey"), message_id=row.get("message_id"),
+            )
+            s.add(event)
+            s.commit()
+            return event.id
+    except Exception as e:
+        logger.error(f"create_flag_event(event_type={row.get('event_type')}): {e}")
+        return None
 
