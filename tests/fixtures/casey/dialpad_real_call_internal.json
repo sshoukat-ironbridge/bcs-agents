@@ -1,0 +1,41 @@
+{
+  "call": {
+    "admin_recording_urls": ["https://dialpad.com/blob/adminrecording/0000000000000001.mp3"],
+    "call_id": "1000000000000002",
+    "contact": {"email": "staff.one@bluecollarscholars.net", "id": "3000000000000002", "name": "Staff One", "phone": "+15550000002", "type": "user"},
+    "date_connected": "1792770115566",
+    "date_ended": "1792770172418",
+    "date_rang": "1792770097497",
+    "date_started": "1792770096559",
+    "direction": "inbound",
+    "duration": 56852.036,
+    "entry_point_target": {},
+    "event_timestamp": "1793129102220",
+    "external_number": "+15550000002",
+    "internal_number": "+15550000099",
+    "is_transferred": false,
+    "mos_score": 4.5,
+    "proxy_target": {},
+    "recording_details": [{"duration": "56000", "id": "0000000000000001", "recording_type": "admincallrecording", "start_time": "1792770115744", "url": "https://dialpad.com/blob/adminrecording/0000000000000001.mp3"}],
+    "state": "hangup",
+    "target": {"email": "pm.two@bluecollarscholars.net", "id": "3000000000000003", "name": "PM Two", "phone": "+15550000099", "type": "user"},
+    "total_duration": 75858.809,
+    "was_recorded": false
+  },
+  "transcript": {
+    "call_id": "1000000000000002",
+    "lines": [
+      {"content": "[placeholder: are you on?]", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "transcript", "user_id": "3000000000000003"},
+      {"content": "ai_csat_reboot_ineligible", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "call_purpose_category", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "question", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "whole_call_summary", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "whole_call_summary_fragment", "name": "PM Two", "time": "2026-10-23T15:41:58.455800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "[placeholder staff greeting]", "name": "Staff One", "time": "2026-10-23T15:42:00.282800", "type": "transcript", "user_id": "3000000000000002"},
+      {"content": "ner", "name": "Staff One", "time": "2026-10-23T15:42:01.352800", "type": "moment", "user_id": "3000000000000002"},
+      {"content": "[placeholder internal coordination line]", "name": "PM Two", "time": "2026-10-23T15:42:02.655800", "type": "transcript", "user_id": "3000000000000003"},
+      {"content": "date", "name": "PM Two", "time": "2026-10-23T15:42:27.832800", "type": "moment", "user_id": "3000000000000003"},
+      {"content": "[placeholder sign-off]", "name": "Staff One", "time": "2026-10-23T15:42:50.682800", "type": "transcript", "user_id": "3000000000000002"}
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "call": {
+    "admin_recording_urls": ["https://dialpad.com/blob/adminrecording/0000000000000000.mp3"],
+    "call_id": "1000000000000001",
+    "contact": {"email": "", "id": "2000000000000001", "name": "Customer One", "phone": "+15550000001", "type": "local"},
+    "date_connected": "1793125350396",
+    "date_ended": "1793125899652",
+    "date_started": "1793125344901",
+    "direction": "outbound",
+    "duration": 549256.2239999999,
+    "entry_point_target": {},
+    "event_timestamp": "1793129076718",
+    "external_number": "+15550000001",
+    "internal_number": "+15550000099",
+    "is_transferred": false,
+    "mos_score": 4.38,
+    "proxy_target": {},
+    "recording_details": [{"duration": "548000", "id": "0000000000000000", "recording_type": "admincallrecording", "start_time": "1793125350727", "url": "https://dialpad.com/blob/adminrecording/0000000000000000.mp3"}],
+    "state": "hangup",
+    "target": {"email": "pm.one@bluecollarscholars.net", "id": "3000000000000001", "name": "PM One", "phone": "+15550000099", "type": "user"},
+    "total_duration": 554750.585,
+    "was_recorded": false
+  },
+  "transcript": {
+    "call_id": "1000000000000001",
+    "lines": [
+      {"contact_id": "2000000000000001", "content": "[placeholder customer greeting]", "name": "Customer One", "time": "2026-10-27T18:22:31.812387", "type": "transcript"},
+      {"content": "whole_call_summary_fragment", "name": "PM One", "time": "2026-10-27T18:22:31.812387", "type": "moment", "user_id": "3000000000000001"},
+      {"user_id": "3000000000000001", "content": "[placeholder PM line about the project]", "name": "PM One", "time": "2026-10-27T18:22:35.100000", "type": "transcript"},
+      {"contact_id": "2000000000000001", "content": "[placeholder customer reply with project detail]", "name": "Customer One", "time": "2026-10-27T18:22:40.500000", "type": "transcript"},
+      {"content": "call_purpose_category", "name": "PM One", "time": "2026-10-27T18:22:45.000000", "type": "moment", "user_id": "3000000000000001"}
+    ]
+  }
+}

@@ -532,3 +532,17 @@ the matching/normalizer code** — `_normalize_phone()`'s existing
 last-10-digit behavior (Stage 5) is already correct and sufficient;
 there was no multi-number-cell or extension failure mode to fix. No
 backfill was run, since there is nothing for a backfill to correct.
+
+**Sanitized real fixtures** (`tests/fixtures/casey/dialpad_real_*.json`,
+Step 5): 3 real call/transcript pairs captured live from the local DB's
+configured PMs, then sanitized (every phone/email/name/call-id/contact-id
+replaced with a placeholder, transcript text replaced with bracketed
+placeholders) while preserving every field, type and shape exactly —
+`dialpad_real_call_connected.json` (external call, mixed transcript+
+moment lines including several moment subtypes never seen in the
+hand-written Stage 4 fixtures: `ai_csat_reboot_ineligible`,
+`call_purpose_category`, `whole_call_summary`,
+`whole_call_summary_fragment`, `ner`, `date`), `dialpad_real_call_
+internal.json` (`contact.type == "user"`, confirming the internal-call
+signal against real data), `dialpad_real_call_zero_duration.json` (no
+transcript was ever fetched for a 0-duration call, confirmed live).

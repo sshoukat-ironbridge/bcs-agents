@@ -1,0 +1,23 @@
+{
+  "call": {
+    "call_id": "1000000000000003",
+    "contact": {"email": "", "id": "2000000000000003", "name": "Customer Three", "phone": "+15550000003", "type": "local"},
+    "date_ended": "1793128822289",
+    "date_rang": "1793128811858",
+    "date_started": "1793128810976",
+    "direction": "inbound",
+    "duration": 0.0,
+    "entry_point_target": {},
+    "event_timestamp": "1793129076595",
+    "external_number": "+15550000003",
+    "internal_number": "+15550000099",
+    "is_transferred": false,
+    "mos_score": 4.41,
+    "proxy_target": {},
+    "state": "hangup",
+    "target": {"email": "pm.one@bluecollarscholars.net", "id": "3000000000000001", "name": "PM One", "phone": "+15550000099", "type": "user"},
+    "total_duration": 11313.393,
+    "voicemail_link": "https://dialpad.com/v/1000000000000003",
+    "was_recorded": false
+  }
+}
