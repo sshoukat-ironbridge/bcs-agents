@@ -150,7 +150,9 @@ if _db_available:
         job_id          = Column(Integer, ForeignKey("casey_active_jobs.id"), nullable=True)
         job_key         = Column(String, nullable=True)  # "client|tab|primary_job_type"
         customer_email  = Column(String, nullable=True)
-        customer_phone  = Column(String, nullable=True)
+        customer_phone  = Column(String, nullable=True)  # doubles as "contact_phone" for calls
+        duration_ms     = Column(Integer, nullable=True)  # dialpad_call only
+        call_state      = Column(String, nullable=True)  # dialpad_call only, e.g. "connected"
         direction       = Column(String, nullable=False)  # inbound | outbound | internal
         occurred_at     = Column(DateTime(timezone=True), nullable=False)
         sender          = Column(String, nullable=True)
@@ -465,6 +467,13 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE dashboard_users ALTER COLUMN role SET DEFAULT 'pm'"))
             conn.execute(text("ALTER TABLE dashboard_users ALTER COLUMN role SET NOT NULL"))
             conn.execute(text("ALTER TABLE dashboard_users ADD COLUMN IF NOT EXISTS linked_name TEXT"))
+            conn.commit()
+
+            # Stage 5: Dialpad call ingestion fields on customer_messages.
+            # customer_phone (already present) doubles as "contact_phone".
+            conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS duration_ms INTEGER"))
+            conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS call_state TEXT"))
+            conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS customer_phone TEXT"))
             conn.commit()
 
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
