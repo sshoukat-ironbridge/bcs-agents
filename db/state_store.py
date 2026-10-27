@@ -538,6 +538,14 @@ def init_db() -> None:
                 # yet) is never missed - upsert on (source, external_id)
                 # makes the overlap idempotent.
                 "casey_dialpad_overlap_hours": "2",
+                # Gmail ingestion (agents/casey/ingest_gmail.py). No static
+                # default for casey_gmail_mailboxes here on purpose: it
+                # resolves dynamically to [notification_sender_email] at
+                # call time if unset, so it can never drift from whatever
+                # that key currently holds.
+                "casey_gmail_max_messages": "500",
+                "casey_gmail_overlap_hours": "2",
+                "casey_gmail_store_unmatched": "false",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(

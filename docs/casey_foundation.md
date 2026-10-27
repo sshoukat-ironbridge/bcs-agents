@@ -546,3 +546,23 @@ hand-written Stage 4 fixtures: `ai_csat_reboot_ineligible`,
 internal.json` (`contact.type == "user"`, confirming the internal-call
 signal against real data), `dialpad_real_call_zero_duration.json` (no
 transcript was ever fetched for a 0-duration call, confirmed live).
+
+### Part B: Gmail ingestion (read only)
+
+**Existing Gmail integration audit (Step 1):**
+- **Mailbox impersonated**: whatever `notification_sender_email`
+  (`app_config`) holds — via Google Workspace domain-wide delegation, the
+  service account can impersonate *any* mailbox in the domain; this
+  config key is simply which one the send path currently uses. Locally
+  configured as `chris.s@bluecollarscholars.net`.
+- **Config key**: `notification_sender_email`.
+- **Scope**: `https://mail.google.com/` — Gmail's **full-access** scope
+  (read, send, modify, delete), not a read-only scope. This is correct
+  for the existing *send* path, but means `integrations/gmail_read.py`
+  (Step 2) requests its own narrower `gmail.readonly` scope, so the
+  read-only guarantee is enforced by the credentials themselves, not
+  just by which methods the wrapper happens to expose.
+- **Mailboxes to read** (new, Step 1): `casey_gmail_mailboxes`
+  (`app_config`, JSON list), defaulting to **only** the currently
+  configured `notification_sender_email` mailbox — never defaults to
+  any PM's own mailbox.
