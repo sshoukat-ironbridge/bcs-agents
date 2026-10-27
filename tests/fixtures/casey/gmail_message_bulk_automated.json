@@ -1,0 +1,14 @@
+{
+  "id": "18f2a3b4c5d6e800",
+  "threadId": "18f2a3b4c5d6e801",
+  "internalDate": "1761002000000",
+  "snippet": "Unsubscribe from this list at any time.",
+  "payload": {
+    "headers": [
+      {"name": "From", "value": "newsletter@example.com"},
+      {"name": "Subject", "value": "Monthly roundup"},
+      {"name": "Precedence", "value": "bulk"},
+      {"name": "List-Unsubscribe", "value": "<mailto:unsub@example.com>"}
+    ]
+  }
+}

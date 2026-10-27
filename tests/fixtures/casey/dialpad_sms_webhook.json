@@ -1,0 +1,21 @@
+{
+  "id": 1234567890123456,
+  "created_date": 1761003000000,
+  "direction": "inbound",
+  "target": {
+    "id": 5908860123456789,
+    "type": "user",
+    "name": "Gustavo",
+    "phone_number": "+16010123456"
+  },
+  "contact": {
+    "id": "contact-1",
+    "name": "Jane Doe",
+    "phone_number": "+15551234567"
+  },
+  "sender_id": null,
+  "from_number": "+15551234567",
+  "to_number": ["+16010123456"],
+  "mms": false,
+  "text": "Can someone call me back about the deck?"
+}

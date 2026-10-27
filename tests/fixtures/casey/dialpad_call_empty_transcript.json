@@ -1,0 +1,12 @@
+{
+  "call": {
+    "id": 1111222233,
+    "direction": "inbound",
+    "duration": 0,
+    "date_started": "2026-10-21T09:00:00",
+    "contact": {"phone_number": "+15559876543", "email": null}
+  },
+  "transcript": {
+    "lines": []
+  }
+}

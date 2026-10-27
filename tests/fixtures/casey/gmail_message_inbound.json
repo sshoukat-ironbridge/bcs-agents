@@ -1,0 +1,13 @@
+{
+  "id": "18f2a3b4c5d6e7f8",
+  "threadId": "18f2a3b4c5d6e7f0",
+  "internalDate": "1761000000000",
+  "snippet": "This is taking way too long. Can you please get folks out here working?!",
+  "payload": {
+    "headers": [
+      {"name": "From", "value": "Julie Harrison <julie.harrison@example.com>"},
+      {"name": "Subject", "value": "Re: Deck project timeline"},
+      {"name": "To", "value": "chris.s@bluecollarscholars.net"}
+    ]
+  }
+}

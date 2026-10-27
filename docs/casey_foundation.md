@@ -162,6 +162,41 @@ All under `agents/casey/`, no network/DB access, full unit test coverage:
   consecutive calendar hours of `received_at`. SMS counts only when
   `casey_sms_counts_as_response` is true (default false). Automated inbound
   mail is excluded outright.
+- **`normalizers.py`** (fixtures in `tests/fixtures/casey/`):
+  - `normalize_dialpad_transcript(call, transcript)`: PM lines (`user_id`)
+    vs. customer lines (`contact_id`); "moment" lines excluded from the
+    text body but kept in `raw_ref`; naive-UTC Dialpad timestamps get
+    `tzinfo=UTC` attached explicitly; duration is read as-is in
+    milliseconds; a zero-line transcript returns `None` (skipped, not an
+    empty row).
+  - `normalize_gmail_message(message)`: direction by sender domain
+    (`OUR_EMAIL_DOMAIN = "bluecollarscholars.net"`, matching the address
+    already hardcoded in `db/state_store.py`'s config defaults);
+    `is_automated_email()` checks Auto-Submitted, bulk/list/junk
+    Precedence, List-Unsubscribe/List-Id, X-Autoreply, noreply-style
+    sender local parts, and the `[BCS Update]` subject prefix.
+  - `normalize_dialpad_sms(payload)`: **checked against Dialpad's actual
+    docs** (https://developers.dialpad.com/docs/sms-events.md, fetched
+    directly) rather than guessed — confirmed fields are `id`, `direction`,
+    `created_date` (ms epoch), `from_number`, `to_number` (list), `text`,
+    and `contact.phone_number` (the external party, regardless of
+    direction). The same lookup found that **the webhook payload itself is
+    JWT-encoded**, signed with a secret chosen when the webhook is created
+    (not returned by the API) — this reshapes Step 9's signature
+    verification; see the webhook section below.
+  - `build_contact_index()` / `match_job()` / `count_ambiguous_contacts()`:
+    matches a message to a job by customer email first, then phone; more
+    than one job sharing a contact never auto-matches (`job_key: None`,
+    every candidate listed) — never guesses. Against the live local DB
+    (176 active jobs): **8 ambiguous emails, 7 ambiguous phones**.
+- **`ingest_windows.py`**: `next_window()` picks the next fetch window
+  (first run: `default_lookback_hours` back from now; otherwise
+  `overlap_minutes` before the last cursor, so a late-arriving event near
+  the previous window's edge is re-fetched rather than missed — safe
+  because every source dedupes on `(source, external_id)`).
+  `paginate()` loops a caller-supplied `fetch_page` to a hard `max_pages`
+  cap, so a pagination bug or runaway feed can't loop forever; it makes no
+  network calls itself.
 
 ### Taxonomy (Step 6)
 

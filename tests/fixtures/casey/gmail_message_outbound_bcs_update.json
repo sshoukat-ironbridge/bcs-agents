@@ -1,0 +1,13 @@
+{
+  "id": "18f2a3b4c5d6e7f9",
+  "threadId": "18f2a3b4c5d6e7f0",
+  "internalDate": "1761001000000",
+  "snippet": "Here is your weekly project update.",
+  "payload": {
+    "headers": [
+      {"name": "From", "value": "Casey <notifications@bluecollarscholars.net>"},
+      {"name": "Subject", "value": "[BCS Update] Your deck project"},
+      {"name": "To", "value": "julie.harrison@example.com"}
+    ]
+  }
+}

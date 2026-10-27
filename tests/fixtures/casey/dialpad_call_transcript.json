@@ -1,0 +1,21 @@
+{
+  "call": {
+    "id": 9988776655,
+    "direction": "outbound",
+    "duration": 184000,
+    "date_started": "2026-10-20T14:05:00",
+    "contact": {
+      "phone_number": "+15551234567",
+      "email": "jane.doe@example.com"
+    }
+  },
+  "transcript": {
+    "lines": [
+      {"type": "moment", "content": "Call started", "time": "2026-10-20T14:05:00"},
+      {"type": "transcript", "user_id": "u1", "contact_id": null, "content": "Hi Jane, this is Gustavo calling about your deck project.", "time": "2026-10-20T14:05:05"},
+      {"type": "transcript", "user_id": null, "contact_id": "c1", "content": "Oh hi, thanks for calling back.", "time": "2026-10-20T14:05:12"},
+      {"type": "moment", "content": "Hold", "time": "2026-10-20T14:06:00"},
+      {"type": "transcript", "user_id": "u1", "contact_id": null, "content": "We'll have the crew out there Monday.", "time": "2026-10-20T14:06:30"}
+    ]
+  }
+}
