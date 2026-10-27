@@ -608,6 +608,10 @@ def init_db() -> None:
                 "casey_gmail_max_messages": "500",
                 "casey_gmail_overlap_hours": "2",
                 "casey_gmail_store_unmatched": "false",
+                # Off by default - agents/casey/main.py's scheduled-run
+                # orchestration checks this; a direct CLI invocation of
+                # ingest_gmail.py always runs regardless.
+                "casey_gmail_enabled": "false",
                 # Backfill suppression (Stage 7): a UTC ISO timestamp. Any
                 # notification for an event before this timestamp, OR any
                 # time this is unset, is stored suppressed/backfill instead
