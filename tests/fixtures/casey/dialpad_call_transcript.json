@@ -1,11 +1,11 @@
 {
   "call": {
-    "id": 9988776655,
+    "call_id": 9988776655,
     "direction": "outbound",
     "duration": 184000,
-    "date_started": "2026-10-20T14:05:00",
+    "date_started": 1792505100000,
     "contact": {
-      "phone_number": "+15551234567",
+      "phone": "+15551234567",
       "email": "jane.doe@example.com"
     }
   },

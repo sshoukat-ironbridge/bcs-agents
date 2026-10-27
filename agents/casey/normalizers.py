@@ -19,8 +19,9 @@ _BULK_PRECEDENCE_VALUES = {"bulk", "list", "junk"}
 # --- Dialpad call transcript -> customer_messages row ----------------------
 
 def _parse_utc_naive(value: "str | None") -> "datetime | None":
-    """Dialpad timestamps are UTC ISO without a timezone suffix; attach
-    UTC explicitly rather than treating them as local time."""
+    """Transcript line timestamps are UTC ISO without a timezone suffix
+    (confirmed: https://developers.dialpad.com/reference/transcriptsget.md);
+    attach UTC explicitly rather than treating them as local time."""
     if not value:
         return None
     dt = datetime.fromisoformat(value)
@@ -29,11 +30,23 @@ def _parse_utc_naive(value: "str | None") -> "datetime | None":
     return dt
 
 
+def _parse_epoch_ms(value) -> "datetime | None":
+    """The call object's date_started is an int64 ms-epoch timestamp
+    (confirmed: https://developers.dialpad.com/reference/calllist.md) —
+    NOT an ISO string like the transcript lines' "time" field. Caught by
+    the Stage 5 live check against real Dialpad data."""
+    if not value:
+        return None
+    return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+
+
 def normalize_dialpad_transcript(call: dict, transcript: dict) -> "dict[str, Any] | None":
-    """call: a Dialpad call object (id, direction, duration [ms],
-    date_started [UTC ISO, no tz], contact {phone_number, email}).
+    """call: a Dialpad call object (call_id, direction, duration [ms],
+    date_started [int64 ms epoch], contact {phone, email, type}) — field
+    names confirmed directly against Dialpad's docs, not guessed.
     transcript: {"lines": [{"type": "transcript"|"moment", "user_id":
-    str|None, "contact_id": str|None, "content": str, "time": UTC ISO}]}.
+    str|None, "contact_id": str|None, "content": str, "time": UTC ISO,
+    no tz}]}.
 
     Lines with user_id are the PM side, lines with contact_id are the
     customer side. "moment" lines (call events, not speech) are excluded
@@ -60,10 +73,10 @@ def normalize_dialpad_transcript(call: dict, transcript: dict) -> "dict[str, Any
     contact = call.get("contact") or {}
     return {
         "source": "dialpad_call",
-        "external_id": str(call.get("id")),
+        "external_id": str(call.get("call_id")),
         "direction": call.get("direction") or "inbound",
-        "occurred_at": _parse_utc_naive(call.get("date_started")),
-        "customer_phone": contact.get("phone_number"),
+        "occurred_at": _parse_epoch_ms(call.get("date_started")),
+        "customer_phone": contact.get("phone"),
         "customer_email": contact.get("email"),
         "body_text": "\n".join(text_parts),
         "duration_ms": call.get("duration") or 0,

@@ -80,7 +80,7 @@ def _pms_with_dialpad_id() -> dict[str, list]:
             usable.append(pm)
         else:
             skipped.append(pm)
-            logger.warning(f"Skipping PM {pm.get('name')!r}: no dialpad_user_id configured")
+            logger.warning(f"Skipping PM {pm.get('full_name')!r}: no dialpad_user_id configured")
     return {"usable": usable, "skipped": skipped}
 
 
@@ -94,7 +94,13 @@ def _is_internal_call(call: dict) -> bool:
 
 
 def _is_connected(call: dict) -> bool:
-    return call.get("state") == "connected" and (call.get("duration") or 0) > 0
+    """duration > 0 is the real "actually connected" signal — LIVE-CHECKED
+    against real Dialpad data: `state` is always "hangup" for a concluded
+    call (never the "connected" shown as Dialpad's one documented
+    example), and date_connected being set correlates exactly with
+    duration > 0 across every call sampled. See
+    docs/casey_foundation.md's Stage 5 live-check notes."""
+    return (call.get("duration") or 0) > 0
 
 
 def _process_call(call: dict, pm: dict, contact_index: dict, job_id_by_key: dict, stats: dict) -> "dict | None":
@@ -121,7 +127,7 @@ def _process_call(call: dict, pm: dict, contact_index: dict, job_id_by_key: dict
         return None
 
     row["call_state"] = call.get("state")
-    row["pm_name"] = pm.get("name")
+    row["pm_name"] = pm.get("full_name")
     stats["with_transcript"] += 1
 
     phone = row.get("customer_phone") or ""
@@ -178,7 +184,7 @@ def run(since: timedelta, dry_run: bool = False) -> dict[str, Any]:
     try:
         for pm in pms:
             calls = list_calls(pm["dialpad_user_id"], start_ms, end_ms)
-            per_pm_counts[pm.get("name", "")] = len(calls)
+            per_pm_counts[pm.get("full_name", "")] = len(calls)
             stats["calls_seen"] += len(calls)
 
             for call in calls:

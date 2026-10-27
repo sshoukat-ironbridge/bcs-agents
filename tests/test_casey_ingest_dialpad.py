@@ -4,8 +4,8 @@ from unittest.mock import patch
 from agents.casey.ingest_dialpad import run, _parse_since, is_enabled
 
 PMS = [
-    {"id": 1, "name": "Gustavo", "dialpad_user_id": "dp-1"},
-    {"id": 2, "name": "NoDialpadPM", "dialpad_user_id": ""},
+    {"id": 1, "full_name": "Gustavo", "dialpad_user_id": "dp-1"},
+    {"id": 2, "full_name": "NoDialpadPM", "dialpad_user_id": ""},
 ]
 
 JOBS = [
@@ -18,15 +18,15 @@ JOBS = [
 ]
 
 
-def _call(call_id, phone="555-111-2222", duration=60000, state="connected",
-          direction="outbound", contact_type="external"):
+def _call(call_id, phone="555-111-2222", duration=60000, state="hangup",
+          direction="outbound", contact_type="local"):
     return {
         "call_id": call_id,
         "direction": direction,
         "state": state,
         "duration": duration,
-        "date_started": "2026-10-20T14:00:00",
-        "contact": {"phone_number": phone, "type": contact_type},
+        "date_started": 1792505100000,  # epoch ms, confirmed field type
+        "contact": {"phone": phone, "type": contact_type},
     }
 
 

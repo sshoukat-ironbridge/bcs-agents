@@ -411,3 +411,64 @@ relying on the earlier probe):
   treated as "no transcript" either way (logged, not stored), and the
   ingestion window's overlap re-fetches it next run regardless of whether
   it was genuinely empty or just not ready yet.
+
+### Live check against real Dialpad data (Step 6) — 3 real bugs caught and fixed
+
+Running the first `--dry-run` against the actual API caught three bugs
+that unit tests (mocking Dialpad's responses) couldn't have caught, since
+the mocks were built on the same wrong assumptions as the code:
+
+1. **`state` is never `"connected"`** — Dialpad's one documented example
+   value for a concluded call is misleading; every real call sampled
+   (250+) had `state == "hangup"`. Fixed `_is_connected()` to use
+   `duration > 0` alone (confirmed to correlate exactly with
+   `date_connected` being set across every call sampled).
+2. **`call.date_started` is an int64 ms-epoch timestamp**, not a naive
+   ISO string like the transcript lines' `time` field — conflating the
+   two raised `ValueError: day is out of range for month` on the very
+   first real call. Added `_parse_epoch_ms()` and switched
+   `normalize_dialpad_transcript()` to use it for `date_started` (the
+   transcript lines still use `_parse_utc_naive()` for their own `time`
+   field, which genuinely is a naive ISO string).
+3. **Field names were wrong**: the call's unique ID field is `call_id`,
+   not `id`; the contact's phone field is `phone`, not `phone_number`.
+   Both were written before Step 1's doc re-verification and never
+   caught until live data exercised them.
+
+All three are now fixed, covered by regression-shaped fixtures/tests, and
+confirmed against two full `--dry-run` passes plus two real ingestion
+runs. `contact.type == "user"` (the internal-call signal) WAS confirmed
+live: 69 of 478 calls had `contact.type == "user"` across the sample
+(other contacts were typed `"local"`).
+
+Also fixed while here: `agents/casey/normalizers.py::_normalize_phone()`
+now keeps only the **last 10 digits** (was: all digits), so a number with
+a leading `"+1"` country code matches the same job's number without it —
+this changes `match_job()`/`build_contact_index()` everywhere, not just
+Dialpad calls. Re-ran `count_ambiguous_contacts()` against the live local
+DB after the fix: **8 ambiguous emails (unchanged), 9 ambiguous phones
+(was 7)** — the 2 additional phones were previously hidden by a
+formatting/country-code difference that now correctly collapses to the
+same number.
+
+**Live summaries** (`--since 7d`, local DB, real Dialpad API):
+
+| Run | Window | Calls seen | With transcript | Empty | Internal | Not connected | Matched | Ambiguous | Unmatched | New rows |
+|---|---|---|---|---|---|---|---|---|---|---|
+| dry-run | 7d | 478 | 329 | 19 | 69 | 61 | 35 | 1 | 293 | 0 (dry run) |
+| real #1 | 7d | 480 | 330 | 20 | 69 | 61 | 35 | 1 | 294 | **330** |
+| real #2 | ~2h12m (overlap only) | 29 | 17 | 1 | 9 | 2 | 2 | 0 | 15 | **0** |
+
+Per-PM call counts (real #1, 7 days): Gustavo 4, Laura 20, Julie 10,
+Daniel 72, Andrea 63, Esteban 24, Carlos 57, Antonio 45, Fernanda 114,
+Jorge 0, Santiago 71. **0 PMs skipped** for a missing `dialpad_user_id`
+— all 11 configured PMs have one. Verified directly against the DB:
+`customer_messages` has exactly 330 `dialpad_call` rows after both real
+runs (unchanged by run #2), and `ingest_cursors` advanced to the end of
+run #2's window.
+
+The high unmatched count (293/330, ~89%) looks consistent with a PM's
+real phone line fielding plenty of calls unrelated to an active tracked
+job (sales calls, wrong numbers, calls about jobs not currently in
+`casey_active_jobs`) rather than a matching bug — `match_job()`'s own
+unit tests confirm the matching logic itself is correct.
