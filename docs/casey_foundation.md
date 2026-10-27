@@ -772,3 +772,45 @@ classification-shaped task, which is the documented case for low
 effort (cheaper, and this model's thinking can't be disabled entirely).
 Config: `casey_model` (default `claude-sonnet-5-5`), `casey_max_tokens`
 (default `1024`), `casey_analysis_enabled` (default `false`).
+
+### `agents/casey/analyze.py` (Step 2 + Part C Step 3's CLI)
+
+Prompt version `"casey-analysis-v1"` (stored in `message_analyses.
+prompt_version`). Input to the model: the target message (wrapped in
+`<customer_message>`/`</customer_message>` delimiters, with the system
+prompt stating it is data, not instructions); up to
+`casey_history_messages` (default 10) previous messages for the same
+`job_key`, last 60 days, oldest first, each with its stored sentiment/
+summary (a history item can be marked `is_summary: True` for a
+scenario-summary item like Sandstrom's pre-cancellation history — it's
+rendered with an explicit `"[summary, not a verbatim message]"` marker
+so the model never mistakes it for an actual quote); the job's current
+open flag (severity/reason/summary) if any.
+
+Output schema (all enums from `taxonomy.py`, `strict: true` +
+`additionalProperties: false`): `sentiment`, `sentiment_score`,
+`is_strong_praise`, `red_flag_suggested`, `severity` (nullable),
+`primary_reason`, `additional_reasons[]`, `reason_notes`, `root_cause`,
+`issue_summary` (≤240 chars), `evidence_quote`,
+`same_complaint_as_open_flag`, `trajectory`
+(`improving|stable|worsening|unknown`), `confidence`.
+
+Validation (`validate_analysis_output()`): all enums checked against
+`taxonomy.py`; `"Other (explain in Notes)"` requires `reason_notes`
+(reuses `taxonomy.validate_reasons()`); `evidence_quote`, when
+non-empty, must be an exact substring of the target message's own
+text. On any validation failure, retries **once**; if the retry also
+fails, the analysis is stored `status="failed"` with the raw model
+output (`raw_json`) and **no flag is ever created** from it
+(`suggested_reasons` forced to `[]`).
+
+CLI: `python -m agents.casey.analyze --limit N [--only-matched]
+[--dry-run]` (default `limit=10`, default `only_matched=True`: only
+messages with a resolved `job_id` are ever analyzed). `--dry-run` makes
+**no API call** — it estimates token cost with a rough ~4-chars/token
+heuristic (no tokenizer dependency) and prints the count that would be
+analyzed.
+
+New `message_analyses` columns (migration verified on the local DB):
+`suggested_primary_reason`, `reason_notes`, `same_complaint_as_open_flag`,
+`trajectory`, `confidence`, `status` (`ok`|`failed`, default `ok`).
