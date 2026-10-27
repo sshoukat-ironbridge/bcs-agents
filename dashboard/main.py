@@ -60,13 +60,11 @@ async def dashboard_home(request: Request):
         except Exception:
             pass
 
-    due = summary.get("due_for_update", 0)
     total = summary.get("total", 0)
 
     stats = {
-        "total_active_jobs":   total,
-        "jobs_due_for_update": due,
-        "oca_flags_active":    oca_active,
+        "total_active_jobs": total,
+        "oca_flags_active":  oca_active,
     }
 
     def _fmt_run(run):

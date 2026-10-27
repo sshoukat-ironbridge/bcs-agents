@@ -151,19 +151,15 @@ async def release_job(request: Request, job_id: int):
 
 @router.post("/jobs/delete")
 async def delete_jobs():
-    """Delete all jobs, escalations, flags, and alert history. Config tables are preserved."""
+    """Delete all jobs and flags. Config tables are preserved."""
     if not _db_available:
         return JSONResponse({"error": "Database not available", "deleted": 0})
 
     try:
-        from db.state_store import (
-            CaseyActiveJob, OcaFlag, CaseySentAlert, OcaRun,
-        )
+        from db.state_store import CaseyActiveJob, OcaFlag
         with _Session() as s:
             jobs_deleted = s.query(CaseyActiveJob).delete()
             s.query(OcaFlag).delete()
-            s.query(CaseySentAlert).delete()
-            s.query(OcaRun).delete()
             s.commit()
         return JSONResponse({"deleted": jobs_deleted})
     except Exception as e:

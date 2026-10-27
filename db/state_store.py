@@ -44,23 +44,6 @@ if _db_available:
         resolved_at = Column(DateTime(timezone=True), nullable=True)
         alert_count = Column(Integer, default=0, nullable=False)
 
-    class OcaRun(Base):
-        __tablename__ = "oca_runs"
-
-        id = Column(Integer, primary_key=True)
-        run_date = Column(Date, nullable=False, index=True)
-        created_at = Column(DateTime(timezone=True), nullable=False)
-
-    class CaseySentAlert(Base):
-        __tablename__ = "casey_sent_alerts"
-
-        id = Column(Integer, primary_key=True)
-        deal_id = Column(String, nullable=False, index=True)
-        alert_type = Column(String, nullable=False)
-        sent_at = Column(DateTime(timezone=True), nullable=False)
-        deal_name = Column(String, nullable=True)
-        send_count = Column(Integer, nullable=False, default=1)
-
     class CaseyActiveJob(Base):
         __tablename__ = "casey_active_jobs"
         __table_args__ = (UniqueConstraint("client_name", "sheet_tab", "primary_job_type", name="uq_client_sheet_tab_jobtype"),)
@@ -76,15 +59,8 @@ if _db_available:
         last_pm_contact = Column(Date, nullable=True)
         most_recent_contact = Column(String, nullable=True)
         pm_communication_history = Column(Text, nullable=True)
-        hubspot_deal_id = Column(String, nullable=True)
-        hubspot_contact_id = Column(String, nullable=True)
-        hubspot_owner_name = Column(String, nullable=True)
         customer_email = Column(String, nullable=True)
         customer_phone = Column(String, nullable=True)
-        last_customer_update_sent = Column(Date, nullable=True)
-        next_scheduled_update = Column(Date, nullable=True)
-        escalation_flag = Column(Boolean, default=False, nullable=False)
-        escalation_reason = Column(String, nullable=True)
         synced_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         # Extended fields synced from Google Sheet
         client_mood = Column(String, nullable=True)
@@ -95,44 +71,16 @@ if _db_available:
         total_project = Column(String, nullable=True)
         sheet_tab = Column(String, nullable=True)
         deadline_to_start = Column(String, nullable=True)
+        address = Column(Text, nullable=True)
         comms_hold = Column(Boolean, nullable=False, default=False)
         comms_hold_reason = Column(Text, nullable=True)
         comms_hold_set_at = Column(DateTime(timezone=True), nullable=True)
         comms_hold_until = Column(Date, nullable=True)
-        # Fix 2: email thread continuity — preserve Gmail thread across Casey sends
-        last_email_thread_id  = Column(Text, nullable=True)
-        last_email_message_id = Column(Text, nullable=True)
-        last_email_subject    = Column(Text, nullable=True)
         # Upsert key v2: allows multi-job clients to have one row per job type
         primary_job_type = Column(String, nullable=True)
         # Soft-delete: jobs removed from sheet are marked retired, not deleted
         retired    = Column(Boolean, nullable=False, default=False)
         retired_at = Column(DateTime(timezone=True), nullable=True)
-
-    class CustomerEmailHistory(Base):
-        __tablename__ = "customer_email_history"
-        __table_args__ = (UniqueConstraint("client_name", "pm_name", name="uq_email_history_client_pm"),)
-
-        id                = Column(Integer, primary_key=True, autoincrement=True)
-        client_name       = Column(String, nullable=False)
-        pm_name           = Column(String, nullable=False)
-        customer_email    = Column(String, nullable=False)
-        last_sent_at      = Column(Date, nullable=True)
-        last_sent_subject = Column(String, nullable=True)
-        email_snippets    = Column(Text, nullable=True)
-        fetched_at        = Column(DateTime(timezone=True), nullable=True)
-
-    class DialpadContactHistory(Base):
-        __tablename__ = "dialpad_contact_history"
-        __table_args__ = (UniqueConstraint("client_name", "pm_name", name="uq_dialpad_history_client_pm"),)
-
-        id                = Column(Integer, primary_key=True, autoincrement=True)
-        client_name       = Column(String, nullable=False)
-        pm_name           = Column(String, nullable=False)
-        customer_phone    = Column(String, nullable=True)
-        last_contact_date = Column(Date, nullable=True)
-        last_contact_type = Column(String, nullable=True)
-        fetched_at        = Column(DateTime(timezone=True), nullable=True)
 
     class AppConfig(Base):
         __tablename__ = "app_config"
@@ -201,10 +149,6 @@ def _row_to_dict(row: "CaseyActiveJob") -> dict:
         "pm_communication_history": row.pm_communication_history,
         "customer_email": row.customer_email,
         "customer_phone": row.customer_phone,
-        "last_customer_update_sent": row.last_customer_update_sent,
-        "next_scheduled_update": row.next_scheduled_update,
-        "escalation_flag": row.escalation_flag,
-        "escalation_reason": row.escalation_reason,
         "synced_at": row.synced_at,
         "client_mood": row.client_mood,
         "complaint_note": row.complaint_note,
@@ -214,13 +158,11 @@ def _row_to_dict(row: "CaseyActiveJob") -> dict:
         "total_project": row.total_project,
         "sheet_tab": row.sheet_tab,
         "deadline_to_start": row.deadline_to_start,
+        "address": row.address,
         "comms_hold": row.comms_hold or False,
         "comms_hold_reason": row.comms_hold_reason,
         "comms_hold_set_at": row.comms_hold_set_at,
         "comms_hold_until": row.comms_hold_until,
-        "last_email_thread_id": row.last_email_thread_id,
-        "last_email_message_id": row.last_email_message_id,
-        "last_email_subject": row.last_email_subject,
         "primary_job_type": row.primary_job_type or "",
         "retired":    row.retired or False,
         "retired_at": row.retired_at,
@@ -239,7 +181,6 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE oca_flags ADD COLUMN IF NOT EXISTS details TEXT"))
             conn.execute(text("ALTER TABLE oca_flags ADD COLUMN IF NOT EXISTS urgency TEXT"))
             # Extended job fields
-            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS hubspot_contact_id TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS client_mood TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS complaint_note TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS job_description TEXT"))
@@ -249,18 +190,14 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS sheet_tab VARCHAR"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS pm_communication_history TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS deadline_to_start VARCHAR"))
+            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS address TEXT"))
             conn.execute(text("ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS summary VARCHAR"))
             # Fix 3: per-customer hold flag
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold BOOLEAN NOT NULL DEFAULT FALSE"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_reason TEXT"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_set_at TIMESTAMP WITH TIME ZONE"))
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS comms_hold_until DATE"))
-            # Fix 4: duplicate send audit trail
-            conn.execute(text("ALTER TABLE casey_sent_alerts ADD COLUMN IF NOT EXISTS send_count INTEGER NOT NULL DEFAULT 1"))
-            # Fix 2 (thread continuity) + Fix 3 (Fernanda display_note)
-            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS last_email_thread_id TEXT"))
-            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS last_email_message_id TEXT"))
-            conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS last_email_subject TEXT"))
+            # Fix 3 (Fernanda display_note)
             conn.execute(text("ALTER TABLE pm_config ADD COLUMN IF NOT EXISTS display_note TEXT"))
             # Upsert key v2: per-job-type tracking for multi-job clients
             conn.execute(text("ALTER TABLE casey_active_jobs ADD COLUMN IF NOT EXISTS primary_job_type VARCHAR DEFAULT ''"))
@@ -425,21 +362,6 @@ def init_db() -> None:
                 )
                 conn.commit()
                 logger.info("Seeded Fernanda (Laura Arbelaez) PM entry")
-
-            # One-time migration: the Gmail history cache predates the
-            # [BCS Update] subject filter, so it may contain Casey's own
-            # automated emails mixed into "PM contact" history. Force every
-            # row to be re-fetched on the next OCA run, then never run again.
-            already_cleared = conn.execute(
-                text("SELECT value FROM app_config WHERE key = 'gmail_cache_cleared'")
-            ).fetchone()
-            if not already_cleared:
-                conn.execute(text("UPDATE customer_email_history SET fetched_at = NULL"))
-                conn.execute(
-                    text("INSERT INTO app_config (key, value) VALUES ('gmail_cache_cleared', 'true')")
-                )
-                conn.commit()
-                logger.info("One-time migration: cleared customer_email_history.fetched_at to force Gmail re-fetch")
         logger.info("Database tables verified/created")
     except Exception as e:
         logger.error(f"init_db error: {e}")
@@ -866,19 +788,14 @@ def upsert_active_job(job: dict) -> None:
                           "pm_communication_history",
                           "customer_email", "customer_phone", "client_mood", "complaint_note",
                           "job_description", "estimator_name", "to_collect", "total_project",
-                          "sheet_tab", "deadline_to_start", "pm_name"):
+                          "sheet_tab", "deadline_to_start", "pm_name", "address"):
                 existing[field] = job.get(field)
             if "comms_hold" in job:
                 existing["comms_hold"] = job["comms_hold"]
                 existing["comms_hold_reason"] = job.get("comms_hold_reason")
-                if job["comms_hold"] and existing.get("escalation_flag"):
-                    existing["escalation_flag"] = False
-                    existing["escalation_reason"] = None
             existing["synced_at"] = now
         else:
-            _memory_jobs[key] = {**job, "last_customer_update_sent": None,
-                                  "next_scheduled_update": None, "escalation_flag": False,
-                                  "escalation_reason": None, "synced_at": now}
+            _memory_jobs[key] = {**job, "synced_at": now}
         return
 
     try:
@@ -916,6 +833,7 @@ def upsert_active_job(job: dict) -> None:
                 row.total_project = job.get("total_project")
                 row.sheet_tab = job.get("sheet_tab")
                 row.deadline_to_start = job.get("deadline_to_start")
+                row.address = job.get("address")
                 row.synced_at = now
                 # Sheet-driven comms hold: written on every sync so hold clears
                 # automatically when the PM cell returns to a real name.
@@ -924,15 +842,6 @@ def upsert_active_job(job: dict) -> None:
                     row.comms_hold_reason = job.get("comms_hold_reason")
                     if job["comms_hold"] and not row.comms_hold_set_at:
                         row.comms_hold_set_at = now
-                    if job["comms_hold"] and row.escalation_flag:
-                        row.escalation_flag = False
-                        row.escalation_reason = None
-                        logger.info(f"Cleared stale escalation for {client_name} — job is on comms_hold")
-                # Never overwrite scheduling fields if already set
-                if not row.last_customer_update_sent and job.get("last_customer_update_sent"):
-                    row.last_customer_update_sent = job["last_customer_update_sent"]
-                if not row.next_scheduled_update and job.get("next_scheduled_update"):
-                    row.next_scheduled_update = job["next_scheduled_update"]
             else:
                 _hold = job.get("comms_hold", False)
                 session.add(CaseyActiveJob(
@@ -957,7 +866,7 @@ def upsert_active_job(job: dict) -> None:
                     total_project=job.get("total_project"),
                     sheet_tab=job.get("sheet_tab"),
                     deadline_to_start=job.get("deadline_to_start"),
-                    escalation_flag=False,
+                    address=job.get("address"),
                     comms_hold=_hold,
                     comms_hold_reason=job.get("comms_hold_reason"),
                     comms_hold_set_at=now if _hold else None,
@@ -987,36 +896,20 @@ def get_all_active_jobs() -> list[dict]:
 
 
 def get_summary() -> dict[str, int]:
-    today = date.today()
-
+    """Row count on casey_active_jobs (unchanged semantics from before the
+    cleanup: every row, retired included). The old escalation/due-for-update
+    reminder concept was removed with legacy Casey; see
+    docs/casey_foundation.md."""
     if not _db_available:
-        all_jobs = list(_memory_jobs.values())
-        escalated = sum(1 for j in all_jobs if j.get("escalation_flag"))
-        due = sum(
-            1 for j in all_jobs
-            if not j.get("escalation_flag")
-            and (j.get("next_scheduled_update") is None or j["next_scheduled_update"] <= today)
-        )
-        up_to_date = len(all_jobs) - escalated - due
-        return {"total": len(all_jobs), "due_for_update": due, "escalated": escalated, "up_to_date": max(up_to_date, 0)}
+        return {"total": len(_memory_jobs)}
 
     try:
         with _Session() as session:
-            all_rows = session.query(CaseyActiveJob).all()
-            total = len(all_rows)
-            escalated = sum(1 for r in all_rows if r.escalation_flag)
-            due = sum(
-                1 for r in all_rows
-                if not r.escalation_flag
-                and (r.next_scheduled_update is None or r.next_scheduled_update <= today)
-            )
-            return {"total": total, "due_for_update": due, "escalated": escalated, "up_to_date": total - escalated - due}
+            return {"total": session.query(CaseyActiveJob).count()}
     except Exception as e:
         logger.error(f"DB error in get_summary: {e}")
-        return {"total": 0, "due_for_update": 0, "escalated": 0, "up_to_date": 0}
+        return {"total": 0}
 
-
-# --- Customer email history (Gmail-based contact tracking) ---
 
 # --- OCA flag functions ---
 
@@ -1154,10 +1047,6 @@ def set_comms_hold(job_id: int, reason: str, hold_until: "date | None" = None) -
             row.comms_hold_reason = reason.strip()
             row.comms_hold_set_at = datetime.now(timezone.utc)
             row.comms_hold_until = hold_until
-            if row.escalation_flag:
-                row.escalation_flag = False
-                row.escalation_reason = None
-                logger.info(f"Cleared stale escalation for job_id={job_id} — manual comms_hold set")
             s.commit()
             return True
     except Exception as e:
@@ -1265,7 +1154,4 @@ def reconcile_retired_jobs(sheet_keys: set) -> int:
     except Exception as e:
         logger.error(f"DB error in reconcile_retired_jobs: {e}")
     return retired_count
-
-
-# --- Fix 4: duplicate send audit trail ---
 

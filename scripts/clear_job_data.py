@@ -20,27 +20,20 @@ def main() -> None:
         print("  docker compose run --rm casey python scripts/clear_job_data.py --confirm")
         sys.exit(1)
 
-    from db.state_store import (
-        _db_available, _Session,
-        CaseyActiveJob, CaseySentAlert, OcaFlag, CustomerEmailHistory,
-    )
+    from db.state_store import _db_available, _Session, CaseyActiveJob, OcaFlag
 
     if not _db_available:
-        print("ERROR: database not available — check POSTGRES_URL.")
+        print("ERROR: database not available, check POSTGRES_URL.")
         sys.exit(1)
 
     with _Session() as s:
-        jobs     = s.query(CaseyActiveJob).delete()
-        alerts   = s.query(CaseySentAlert).delete()
-        flags    = s.query(OcaFlag).delete()
-        history  = s.query(CustomerEmailHistory).delete()
+        jobs  = s.query(CaseyActiveJob).delete()
+        flags = s.query(OcaFlag).delete()
         s.commit()
 
     print(f"Deleted {jobs:>6} rows from casey_active_jobs")
-    print(f"Deleted {alerts:>6} rows from casey_sent_alerts")
     print(f"Deleted {flags:>6} rows from oca_flags")
-    print(f"Deleted {history:>6} rows from customer_email_history")
-    print("Done. Config tables (app_config, pm_config, agent_runs, …) were NOT touched.")
+    print("Done. Config tables (app_config, pm_config, agent_runs, ...) were NOT touched.")
 
 
 if __name__ == "__main__":
