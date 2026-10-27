@@ -841,3 +841,34 @@ pass rate (the fixture always returns the same neutral/no-flag
 output). A real run (no `--offline`) requires `ANTHROPIC_API_KEY` to be
 set; without it, `run_eval()` raises immediately rather than silently
 running offline.
+
+## Part C: Flag processing and Casey run wiring
+
+### `agents/casey/process_flags.py` (Step 1)
+
+For each `get_unprocessed_analyses()` row (`red_flag_suggested=True`,
+`status="ok"`, no `casey_flag_events` row yet for its `message_id`),
+builds a `flag_logic` candidate and calls `decide_action()` against
+`get_open_flags_for_job()` (every non-closed flag for that job — more
+than one can be open at once, one per distinct complaint). Writes
+`casey_flags`/`casey_flag_events` (`actor="casey"`) and calls
+`plan_notifications()` (honouring backfill suppression) for `create`/
+`escalate`/`create_separate`; `note_improvement` writes only an event
+(**never** closes or lowers the flag); `no_op` still writes an event
+(with `flag_id=None` if no flag matched — the migration that made
+`casey_flag_events.flag_id` nullable) so the analysis is marked
+processed either way. Humans only change status or lower severity —
+nothing here does either.
+
+### `agents/casey/main.py` (Step 2)
+
+Runs `ingest_dialpad`, `ingest_gmail`, `analyze` (only when
+`casey_analysis_enabled`), `process_flags`, `run_watches` in order,
+each in its own `try`/`except` so one stage's failure never blocks the
+rest (logged clearly, counted as `"error"` in the summary). One
+summary line at the end with counts per stage. `--dry-run` passes
+through to every stage that supports it (no DB writes, no API calls
+that cost money, no sends) — `process_flags` and `run_watches` already
+support it; `ingest_dialpad`/`ingest_gmail` run their own `--dry-run`
+path. `--stages stage1,stage2` picks a subset. Nothing outbound is
+implemented anywhere in this chain — only planned notification rows.
