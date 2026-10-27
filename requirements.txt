@@ -6,6 +6,7 @@ slack-sdk
 google-api-python-client
 google-auth
 sqlalchemy
+pyjwt
 psycopg2-binary
 python-dotenv
 requests

@@ -198,6 +198,33 @@ All under `agents/casey/`, no network/DB access, full unit test coverage:
   cap, so a pagination bug or runaway feed can't loop forever; it makes no
   network calls itself.
 
+### Webhook receiver (Step 9)
+
+`POST /webhooks/dialpad/sms` (`dashboard/routes/webhooks.py`), exempt from
+login via `dashboard/main.py`'s `_PUBLIC_PREFIXES += ("/webhooks/",)`.
+Reads the raw body (capped at 64KB — oversized bodies get `413`),
+decodes/verifies the JWT against `dialpad_webhook_secret`, stores the
+result in `webhook_events` (`signature_valid` recorded either way), and
+returns `200` immediately — no event processing happens in the receiver.
+No secret configured → `401`, unless `ALLOW_UNSIGNED_WEBHOOKS=1` (local dev
+only), which accepts and stores plain JSON with `signature_valid=False`.
+
+**Signing algorithm is UNCONFIRMED**: Dialpad's docs confirm the payload is
+JWT-encoded and signed with a secret you choose yourself (not returned by
+their API), but don't name the algorithm. `HS256` is assumed (the standard
+choice for a shared-secret JWT) — flagging this as needing confirmation
+from Dialpad support or a real captured webhook before going live.
+
+Verified live: rebuilt the dashboard image, curled `/`, `/jobs` and
+`/login` (login still enforced — `302`/`302`/`200`), posted an unsigned
+body to the webhook with no secret configured (`401`), set
+`dialpad_webhook_secret` in the local DB, posted a locally-signed JWT
+(`200`), and confirmed the row landed in `webhook_events` with
+`signature_valid = true` and the decoded payload. 7 new tests (172 total
+passing) cover valid/invalid signature, missing secret (with and without
+`ALLOW_UNSIGNED_WEBHOOKS`), oversized body, and that every other dashboard
+route still requires login.
+
 ### Taxonomy (Step 6)
 
 `agents/casey/taxonomy.py` holds the severities, statuses, reasons and root

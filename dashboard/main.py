@@ -16,15 +16,17 @@ from dashboard.routes.config import router as config_router
 from dashboard.routes.agents import router as agents_router
 from dashboard.routes.runs import router as runs_router
 from dashboard.routes.auth import router as auth_router
+from dashboard.routes.webhooks import router as webhooks_router
 
 app.include_router(jobs_router)
 app.include_router(config_router)
 app.include_router(agents_router)
 app.include_router(runs_router)
 app.include_router(auth_router)
+app.include_router(webhooks_router)
 
 _PUBLIC_PATHS = {"/login"}
-_PUBLIC_PREFIXES = ("/static/",)
+_PUBLIC_PREFIXES = ("/static/", "/webhooks/")
 
 
 @app.middleware("http")
