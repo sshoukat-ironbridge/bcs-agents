@@ -369,3 +369,45 @@ never send), `response_watch.py` (24h window classification),
   existing "Duplicate sheet rows" checklist section.)
 - **Note added** at the top of this doc: `casey_active_jobs` is the
   shared table (OCA writes, Casey reads), not renamed.
+
+### Dialpad API re-verification (Step 1)
+
+Fetched directly from https://developers.dialpad.com (not guessed, not
+relying on the earlier probe):
+
+**`GET /api/v2/call` — confirmed:**
+- `started_after` / `started_before`: int64, UTC **milliseconds** since
+  epoch.
+- `target_id` (int64) + `target_type` (must be `"user"` for a PM):
+  `target_type` is required whenever `target_id` is given.
+- `cursor` (string): pagination token from the previous response's
+  top-level `cursor` field; response also has `items` (array).
+- `include_anonymized` (bool, default false).
+- **No page-size/`limit` parameter is documented at all** — pagination is
+  cursor-only; our page cap is a client-side loop limit, not a server
+  parameter.
+- Call object fields: `call_id` (int64), `direction`, `state` (string,
+  no documented enum — only a `"connected"` example value), `duration`
+  and `total_duration` (both milliseconds), `date_started`/`date_connected`/
+  `date_ended` (int64 timestamps), `contact`/`target` objects (each with
+  `id`, `name`, `phone`, `email`), `external_number`/`internal_number`.
+- Rate limit: 1200 requests/minute (documented).
+
+**`GET /api/v2/transcripts/{call_id}` — confirmed:**
+- Response: `{"call_id": int64, "lines": [...]}`.
+- Each line: `type` (`"moment"` | `"transcript"` | also `ai_question`,
+  `custom_moment`, `real_time_moment`, or null), `content` (string),
+  `time` (ISO datetime, **no timezone suffix** — confirms the "attach
+  UTC explicitly" assumption from Step 8e), `user_id` (int64, PM side),
+  `contact_id` (string, customer side), `name`.
+
+**Could not confirm from the docs:**
+- The full enum of `state` values (only `"connected"` is shown as an
+  example) — using `state == "connected"` AND `duration_ms > 0` together
+  as the "actually connected" signal, per the task's own wording, rather
+  than trusting `state` alone.
+- What a "transcript not ready yet" response looks like — only a `200`
+  is documented. Operationally this doesn't matter: a 0-line response is
+  treated as "no transcript" either way (logged, not stored), and the
+  ingestion window's overlap re-fetches it next run regardless of whether
+  it was genuinely empty or just not ready yet.
