@@ -205,3 +205,14 @@ def test_dry_run_never_updates_or_notifies():
     assert stats["overdue"] == 1
     mock_update.assert_not_called()
     mock_notify.assert_not_called()
+
+
+def test_find_unwatched_inbound_messages_is_scoped_to_gmail_source():
+    # Regression: this function must never pick up inbound dialpad_call
+    # rows — the 24h response-watch rule is specifically about customer
+    # emails. Caught live: 82 of 88 watches had come from dialpad_call
+    # rows before this filter was added.
+    import inspect
+    import db.state_store as state_store_module
+    source = inspect.getsource(state_store_module.find_unwatched_inbound_messages)
+    assert 'CustomerMessage.source == "gmail"' in source

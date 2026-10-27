@@ -1502,8 +1502,11 @@ def upsert_customer_message(row: dict) -> bool:
 # --- casey_response_watches (agents/casey/run_watches.py) -------------------
 
 def find_unwatched_inbound_messages() -> list[dict]:
-    """Inbound, non-automated customer_messages rows (any source) with no
-    existing casey_response_watches row yet."""
+    """Inbound, non-automated **Gmail** customer_messages rows with no
+    existing casey_response_watches row yet. The 24-hour response-watch
+    rule is specifically about customer emails (Stage 6) — a Dialpad call
+    is answered or not in the call itself, not via a follow-up watch, so
+    source must be scoped to "gmail" here."""
     if not _db_available:
         return []
     try:
@@ -1511,7 +1514,11 @@ def find_unwatched_inbound_messages() -> list[dict]:
             watched_ids = {row[0] for row in s.query(CaseyResponseWatch.inbound_message_id).all()}
             rows = (
                 s.query(CustomerMessage)
-                .filter(CustomerMessage.direction == "inbound", CustomerMessage.is_automated == False)
+                .filter(
+                    CustomerMessage.source == "gmail",
+                    CustomerMessage.direction == "inbound",
+                    CustomerMessage.is_automated == False,
+                )
                 .all()
             )
             return [

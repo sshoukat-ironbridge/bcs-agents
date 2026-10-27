@@ -680,3 +680,34 @@ unchanged, 0 responded (the 8 that resolved on the first run are now
 closed and correctly excluded from the open-watch count) — confirmed
 directly in Postgres (88 total watches, 195 notification rows,
 unchanged after the rerun).
+
+## Stage 7
+
+### Part A Step 1: fix watch source scoping, delete wrongly-created watches
+
+**Investigation**: of 88 `casey_response_watches`, only 17 `gmail` rows
+existed at all — printing watch count by inbound message source showed
+**82 of 88 watches were created from `dialpad_call` inbound rows**, 6
+from `gmail`. Root cause: `db/state_store.py::
+find_unwatched_inbound_messages()` filtered on `direction == "inbound"`
+and `is_automated == False` only — no `source == "gmail"` condition —
+even though the 24-hour response-watch rule (Stage 6) is specifically
+about customer emails; a Dialpad call is answered or not within the
+call itself, not via a follow-up watch. Only one code path ever creates
+a watch (`run_watches.py` → `find_unwatched_inbound_messages()`), so
+this was the single place to fix.
+
+**Fix**: added `CustomerMessage.source == "gmail"` to the filter.
+Regression test added (`inspect.getsource()`-based, since this
+function's real SQL filtering can't be exercised without a live DB in
+this project's DB-free unit test suite — sqlalchemy isn't even
+installed outside Docker).
+
+**Cleanup on the local DB**: deleted the 82 wrongly-created watches and
+the 195 notifications tied to them (all notifications happened to be
+tied to the wrongly-created, dialpad-sourced overdue watches).
+Confirmed: `customer_messages` has exactly 6 inbound, non-automated
+`gmail` rows, matching the 6 remaining (correct) watches exactly
+(4 responded, 2 waiting, 0 overdue, 0 excluded; 0 notifications left).
+Re-ran `run_watches` for real afterward: 0 new watches (all 6 already
+exist), counts unchanged.
