@@ -50,3 +50,24 @@ Kept (live readers found):
   from `integrations/sheets.py`'s existing `address` field, saved on every
   `upsert_active_job()` call (insert and update paths), with a unit test
   (`tests/test_state_store_jobs.py`).
+
+### Cleanup script and backup procedure (Step 4)
+
+`scripts/db_cleanup.py` drops the dead tables/columns/`app_config` keys
+listed above. It is never called by `init_db()` or any agent; a human runs
+it directly, and the default is a dry run.
+
+Backup before applying:
+```
+docker compose exec -T postgres pg_dump -U <user> <db> > backups/<name>.sql
+```
+`./backups/` is gitignored.
+
+Apply (after taking the backup):
+```
+ALLOW_DB_CLEANUP=1 python scripts/db_cleanup.py --apply --backup-file backups/<name>.sql
+```
+Requires all three: `ALLOW_DB_CLEANUP=1`, an existing non-empty
+`--backup-file`, and typing the database name (read from `POSTGRES_URL`) to
+confirm. Runs as one transaction using `DROP TABLE IF EXISTS` /
+`ALTER TABLE ... DROP COLUMN IF EXISTS`, so it's idempotent (safe to re-run).
