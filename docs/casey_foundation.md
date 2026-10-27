@@ -225,6 +225,16 @@ passing) cover valid/invalid signature, missing secret (with and without
 `ALLOW_UNSIGNED_WEBHOOKS`), oversized body, and that every other dashboard
 route still requires login.
 
+### Calibration golden set (Step 10)
+
+`tests/fixtures/casey/calibration.json`: 9 cases from Chris's examples
+(verbatim quotes, except the Sandstrom pre-cancellation entry, which is
+explicitly marked `"boundary_note"` containing "summary, not a verbatim
+quote" — Carl's actual words were never invented). `agents/casey/
+calibration.py::load_calibration_set()` validates the file shape and that
+every `expected_severity` is one of `SEVERITIES`. No LLM calls yet; this
+set is for evaluating the severity-classification prompt once it exists.
+
 ### Taxonomy (Step 6)
 
 `agents/casey/taxonomy.py` holds the severities, statuses, reasons and root

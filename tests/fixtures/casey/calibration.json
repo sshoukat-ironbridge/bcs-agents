@@ -1,0 +1,65 @@
+[
+  {
+    "customer": "Julie Harrison",
+    "date": "2026-09-16",
+    "text": "The basement lights...I'm still confused about the recessed lightening. The new ceilings doesn't have holes or anything. At this point, would it be easier to do one larger light in the middle?",
+    "expected_severity": "Low",
+    "boundary_note": "Low or Neutral boundary"
+  },
+  {
+    "customer": "Danielle Ewen",
+    "date": "2026-10-05",
+    "text": "Am I reading this right that the new deck and the room are the same dimensions? That is not what we discussed initially, and I am wondering whether I am misinterpreting?",
+    "expected_severity": "Low",
+    "boundary_note": "Low or Neutral boundary"
+  },
+  {
+    "customer": "Julie Harrison",
+    "date": "2026-10-09",
+    "text": "This is taking way too long. Can you please get folks out here working?!",
+    "expected_severity": "Medium",
+    "boundary_note": null
+  },
+  {
+    "customer": "Caroline Day",
+    "date": "2026-10-19",
+    "text": "I've been let down twice (with the premature digging for the wall and the lack of preparedness with specified materials that is now causing more delays). I am trying to trust a good outcome. It's getting harder.",
+    "expected_severity": "Medium",
+    "boundary_note": "borderline High"
+  },
+  {
+    "customer": "Julie Harrison",
+    "date": "2026-09-26",
+    "text": "Honestly, we're just feeling a little taken advantage of and are disappointed.",
+    "expected_severity": "High",
+    "boundary_note": null
+  },
+  {
+    "customer": "Danielle Ewen",
+    "date": "2026-10-01",
+    "text": "You have received over $35,000 of our funds, and it is starting to feel like we are not receiving any services for that investment.",
+    "expected_severity": "High",
+    "boundary_note": null
+  },
+  {
+    "customer": "Danielle Ewen",
+    "date": "2026-10-19",
+    "text": "This is starting to feel like a failed partnership either between us and your team, or between your team and the architect.",
+    "expected_severity": "Critical",
+    "boundary_note": "proactive, needs project history"
+  },
+  {
+    "customer": "Betsy Sandstrom",
+    "date": "2026-10-20",
+    "text": "We'll let you know a good time to call after we receive the refund.",
+    "expected_severity": "Critical",
+    "boundary_note": "confirmed escalation"
+  },
+  {
+    "customer": "Betsy Sandstrom",
+    "date": null,
+    "text": "Repeated delays and failed start commitments over several weeks led to declining confidence; the prior High flag should have risen to Critical before the Oct 19 cancellation.",
+    "expected_severity": "High",
+    "boundary_note": "summary, not a verbatim quote — pre-cancellation history; the High flag should rise to Critical before the Oct 19 cancellation. Do not treat as Carl's actual words."
+  }
+]
