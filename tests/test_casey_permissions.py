@@ -17,8 +17,18 @@ from db.state_store import _Session, _db_available, CaseyFlag
 def seeded_demo_data():
     if not _db_available:
         pytest.skip("no database available in this environment")
+    from db.state_store import get_config, set_config
     import scripts.seed_casey_demo as seed_demo
+
+    # This test seeds and reads is_demo=True rows, so it must not depend
+    # on whatever casey_demo_mode happens to be set to in a shared local
+    # DB (e.g. a Stage 10a live run turning it off) — force it on here,
+    # then restore whatever it was.
+    previous = get_config("casey_demo_mode")
+    set_config("casey_demo_mode", "true")
     seed_demo.run(reset=True)
+    yield
+    set_config("casey_demo_mode", previous if previous is not None else "true")
 
 
 @pytest.fixture
