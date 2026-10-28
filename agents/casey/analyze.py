@@ -335,7 +335,7 @@ def run(limit: int = DEFAULT_LIMIT, only_matched: bool = DEFAULT_ONLY_MATCHED, d
     max_tokens = int(get_config("casey_max_tokens") or 1024)
     history_limit = int(get_config("casey_history_messages") or DEFAULT_HISTORY_MESSAGES)
 
-    messages = get_messages_to_analyze(limit=limit, only_matched=only_matched)
+    messages = get_messages_to_analyze(limit=limit, only_matched=only_matched, current_prompt_version=PROMPT_VERSION)
 
     if dry_run:
         estimated_input_tokens = 0
@@ -373,13 +373,174 @@ def run(limit: int = DEFAULT_LIMIT, only_matched: bool = DEFAULT_ONLY_MATCHED, d
     return stats
 
 
+# --- Backfill (Stage 10a): grouped by job, cost-capped, resumable ----------
+
+DEFAULT_MAX_COST_USD = 15.0
+PROGRESS_EVERY = 25
+
+# Sonnet 5.5 pricing (see docs/casey_foundation.md) — same figures
+# scripts/casey_eval.py uses; kept local here rather than importing a
+# script module into an agent module.
+INPUT_COST_PER_MILLION = 2.00
+OUTPUT_COST_PER_MILLION = 10.00
+
+
+def _message_cost(usage: dict) -> float:
+    return (usage.get("input_tokens", 0) / 1_000_000 * INPUT_COST_PER_MILLION
+            + usage.get("output_tokens", 0) / 1_000_000 * OUTPUT_COST_PER_MILLION)
+
+
+def _average_tokens_seen(model: str) -> "tuple[float, float]":
+    """Average input/output tokens per real analysis already stored for
+    this model (pulled from raw_json's "usage", since token counts
+    aren't columns of their own) — (0, 0) if there's no history yet."""
+    from db.state_store import _Session, _db_available, MessageAnalysis
+
+    if not _db_available:
+        return 0.0, 0.0
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(MessageAnalysis.raw_json)
+                .filter(MessageAnalysis.model == model, MessageAnalysis.raw_json.isnot(None))
+                .limit(200)
+                .all()
+            )
+    except Exception:
+        return 0.0, 0.0
+
+    input_total, output_total, n = 0, 0, 0
+    for (raw,) in rows:
+        usage = (raw or {}).get("usage") or {}
+        if usage.get("input_tokens"):
+            input_total += usage["input_tokens"]
+            output_total += usage.get("output_tokens", 0)
+            n += 1
+    return (input_total / n, output_total / n) if n else (0.0, 0.0)
+
+
+def backfill(since=None, all_matched: bool = True, max_cost_usd: float = DEFAULT_MAX_COST_USD,
+             dry_run: bool = False) -> dict[str, Any]:
+    """Analyzes every eligible unanalyzed message (incoming email + both
+    call directions; never outgoing email, never is_automated, never
+    skip_reason — get_messages_to_analyze() already enforces this),
+    grouped by job and oldest-first within each job so history builds up
+    correctly. Resumable: a message already analyzed at the CURRENT
+    prompt_version is skipped. Stops cleanly once max_cost_usd is spent
+    and reports how many messages are left."""
+    from db.state_store import get_config, get_messages_to_analyze, get_message_history, get_open_flag_for_job, save_analysis
+
+    model = get_config("casey_model") or "claude-sonnet-5-5"
+    max_tokens = int(get_config("casey_max_tokens") or 1024)
+    history_limit = int(get_config("casey_history_messages") or DEFAULT_HISTORY_MESSAGES)
+
+    messages = get_messages_to_analyze(
+        limit=None, only_matched=all_matched, since=since, current_prompt_version=PROMPT_VERSION,
+    )
+
+    per_pm_counts: dict[str, int] = {}
+    for m in messages:
+        pm = m.get("pm_name") or "Unassigned"
+        per_pm_counts[pm] = per_pm_counts.get(pm, 0) + 1
+
+    if dry_run:
+        avg_input, avg_output = _average_tokens_seen(model)
+        if avg_input == 0 and messages:
+            system = build_system_prompt()
+            heuristic_total = 0
+            for m in messages:
+                customer_text, pm_context = split_call_transcript(m.get("body_text") or "")
+                user_message = build_user_message({"body_text": customer_text}, [], None, pm_context)
+                heuristic_total += estimate_tokens(system) + estimate_tokens(user_message)
+            avg_input = heuristic_total / len(messages)
+            avg_output = max_tokens
+        estimated_cost = len(messages) * (
+            avg_input / 1_000_000 * INPUT_COST_PER_MILLION + avg_output / 1_000_000 * OUTPUT_COST_PER_MILLION
+        )
+        return {
+            "would_analyze": len(messages), "per_pm_counts": per_pm_counts,
+            "estimated_cost": round(estimated_cost, 4), "model": model,
+        }
+
+    by_job: dict[str, list[dict]] = {}
+    for m in messages:
+        by_job.setdefault(m.get("job_key") or "", []).append(m)
+
+    stats = {
+        "analyzed": 0, "ok": 0, "failed": 0, "red_flags": 0,
+        "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "remaining": 0, "stopped_early": False,
+    }
+    total_cost = 0.0
+    processed = 0
+
+    for job_key in sorted(by_job.keys()):
+        if total_cost >= max_cost_usd:
+            stats["stopped_early"] = True
+            break
+        for message in by_job[job_key]:
+            if total_cost >= max_cost_usd:
+                stats["stopped_early"] = True
+                break
+
+            history = get_message_history(message.get("job_key"), message["occurred_at"], limit=history_limit,
+                                            since_days=HISTORY_LOOKBACK_DAYS)
+            open_flag = get_open_flag_for_job(message.get("job_key"))
+            result = analyze_one(message, history, open_flag, model=model, max_tokens=max_tokens)
+
+            usage = result.pop("usage", {"input_tokens": 0, "output_tokens": 0})
+            total_cost += _message_cost(usage)
+            stats["input_tokens"] += usage["input_tokens"]
+            stats["output_tokens"] += usage["output_tokens"]
+            stats["analyzed"] += 1
+            stats["ok" if result["status"] == "ok" else "failed"] += 1
+            if result["status"] == "ok" and result.get("red_flag_suggested"):
+                stats["red_flags"] += 1
+
+            save_analysis(result)
+            processed += 1
+            if processed % PROGRESS_EVERY == 0:
+                logger.info(f"Backfill progress: {processed}/{len(messages)} analyzed, ${total_cost:.2f} spent")
+        if stats["stopped_early"]:
+            break
+
+    stats["cost"] = round(total_cost, 4)
+    stats["remaining"] = len(messages) - processed
+    return stats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--only-matched", dest="only_matched", action="store_true", default=DEFAULT_ONLY_MATCHED)
     parser.add_argument("--all-messages", dest="only_matched", action="store_false")
+    parser.add_argument("--since", help="Backfill mode: e.g. '14d', '7d'. Grouped by job, cost-capped, resumable.")
+    parser.add_argument("--all-matched", action="store_true", help="Backfill mode: no --limit cap.")
+    parser.add_argument("--max-cost", type=float, default=DEFAULT_MAX_COST_USD, help="Backfill mode: USD cap, default 15.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    if args.since or args.all_matched:
+        from agents.casey.ingest_windows import parse_since
+        since_dt = None
+        if args.since:
+            from datetime import datetime, timezone
+            since_dt = datetime.now(timezone.utc) - parse_since(args.since)
+        stats = backfill(since=since_dt, all_matched=True, max_cost_usd=args.max_cost, dry_run=args.dry_run)
+
+        if args.dry_run:
+            print(f"Would analyze: {stats['would_analyze']} message(s)")
+            print(f"Model: {stats['model']}")
+            print(f"Estimated cost: ${stats['estimated_cost']:.4f}")
+            print(f"Per-PM counts: {stats['per_pm_counts']}")
+        else:
+            print(f"Analyzed: {stats['analyzed']}")
+            print(f"Ok: {stats['ok']}")
+            print(f"Failed: {stats['failed']}")
+            print(f"Red flags suggested: {stats['red_flags']}")
+            print(f"Cost: ${stats['cost']:.4f}")
+            print(f"Stopped early (cost cap): {stats['stopped_early']}")
+            print(f"Remaining: {stats['remaining']}")
+        return
 
     stats = run(limit=args.limit, only_matched=args.only_matched, dry_run=args.dry_run)
 

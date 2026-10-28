@@ -1985,11 +1985,18 @@ def _customer_message_to_dict(r) -> dict:
     }
 
 
-def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[dict]:
+def get_messages_to_analyze(limit: "int | None" = 10, only_matched: bool = True,
+                             since=None, current_prompt_version: "str | None" = None) -> list[dict]:
     """Candidates for agents/casey/analyze.py, oldest first (deterministic
-    FIFO), capped at `limit`. only_matched=True restricts to rows with a
-    resolved job_id (never analyzes a message Casey can't tie to a
-    project).
+    FIFO), capped at `limit` (None/0 means unlimited — the backfill
+    path). only_matched=True restricts to rows with a resolved job_id
+    (never analyzes a message Casey can't tie to a project). since, if
+    given, restricts to occurred_at >= since.
+
+    "Already analyzed" means has a message_analyses row — with
+    current_prompt_version given, only a row at THAT prompt_version
+    counts, so a prompt-version bump makes every message resumable
+    again instead of being skipped forever (Stage 10a backfill).
 
     Channel rules (Stage 10a): Gmail is analyzed inbound only — an
     outbound email is stored as metadata only and has no body to score.
@@ -2004,7 +2011,11 @@ def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[
         return []
     try:
         with _Session() as s:
-            analyzed_ids = {row[0] for row in s.query(MessageAnalysis.message_id).all()}
+            analyzed_q = s.query(MessageAnalysis.message_id)
+            if current_prompt_version is not None:
+                analyzed_q = analyzed_q.filter(MessageAnalysis.prompt_version == current_prompt_version)
+            analyzed_ids = {row[0] for row in analyzed_q.all()}
+
             q = s.query(CustomerMessage).filter(
                 CustomerMessage.source.in_(["gmail", "dialpad_call"]),
                 or_(
@@ -2017,9 +2028,13 @@ def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[
             )
             if only_matched:
                 q = q.filter(CustomerMessage.job_id.isnot(None))
+            if since is not None:
+                q = q.filter(CustomerMessage.occurred_at >= since)
             q = q.order_by(CustomerMessage.occurred_at.asc())
             rows = [r for r in q.all() if r.id not in analyzed_ids]
-            return [_customer_message_to_dict(r) for r in rows[:limit]]
+            if limit:
+                rows = rows[:limit]
+            return [_customer_message_to_dict(r) for r in rows]
     except Exception as e:
         logger.error(f"get_messages_to_analyze: {e}")
         return []

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from agents.casey.analyze import (
     build_input_schema, build_system_prompt, build_user_message, validate_analysis_output,
-    analyze_one, run, estimate_tokens, split_call_transcript,
+    analyze_one, run, backfill, estimate_tokens, split_call_transcript,
     CUSTOMER_MESSAGE_OPEN_DELIM, CUSTOMER_MESSAGE_CLOSE_DELIM, PROMPT_VERSION,
 )
 
@@ -329,3 +329,112 @@ def test_real_run_saves_analysis_and_tallies_stats():
     assert stats["ok"] == 1
     assert stats["red_flags"] == 1
     assert stats["input_tokens"] == 100
+
+
+# --- backfill() (Stage 10a) --------------------------------------------------
+
+def _backfill_message(id_, job_key, occurred_at, pm_name="PM One", body_text="hello " * 10):
+    return {"id": id_, "job_key": job_key, "occurred_at": occurred_at, "pm_name": pm_name, "body_text": body_text}
+
+
+def test_backfill_groups_by_job_and_processes_oldest_first_within_job():
+    messages = [
+        _backfill_message(1, "A|to_start|Deck", "2026-10-01"),
+        _backfill_message(2, "A|to_start|Deck", "2026-10-02"),
+        _backfill_message(3, "B|to_start|Fence", "2026-10-01"),
+    ]
+    seen_order = []
+
+    def fake_analyze_one(message, history, open_flag, **kwargs):
+        seen_order.append(message["id"])
+        return {"status": "ok", "sentiment": "neutral", "suggested_severity": None, "summary": "s",
+                "confidence": 0.5, "red_flag_suggested": False, "usage": {"input_tokens": 10, "output_tokens": 5}}
+
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "100"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=messages), \
+         patch("db.state_store.get_message_history", return_value=[]), \
+         patch("db.state_store.get_open_flag_for_job", return_value=None), \
+         patch("db.state_store.save_analysis"), \
+         patch("agents.casey.analyze.analyze_one", fake_analyze_one):
+        backfill(dry_run=False)
+    # Job A's two messages stay in their chronological order (1 then 2);
+    # job B's message (sorted job_key "B" > "A") comes after.
+    assert seen_order == [1, 2, 3]
+
+
+def test_backfill_stops_at_cost_cap_and_reports_remaining():
+    messages = [_backfill_message(i, "A|to_start|Deck", f"2026-10-{i:02d}") for i in range(1, 6)]
+
+    def fake_analyze_one(message, history, open_flag, **kwargs):
+        return {"status": "ok", "sentiment": "neutral", "suggested_severity": None, "summary": "s",
+                "confidence": 0.5, "red_flag_suggested": False,
+                "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000}}  # $12/message at $2+$10 per M
+
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "100"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=messages), \
+         patch("db.state_store.get_message_history", return_value=[]), \
+         patch("db.state_store.get_open_flag_for_job", return_value=None), \
+         patch("db.state_store.save_analysis"), \
+         patch("agents.casey.analyze.analyze_one", fake_analyze_one):
+        stats = backfill(max_cost_usd=12.0, dry_run=False)
+    assert stats["analyzed"] == 1  # one $12 message already hits the cap
+    assert stats["stopped_early"] is True
+    assert stats["remaining"] == 4
+
+
+def test_backfill_is_resumable_by_current_prompt_version():
+    with patch("db.state_store.get_config", return_value=""), \
+         patch("db.state_store.get_messages_to_analyze") as mock_get:
+        mock_get.return_value = []
+        backfill(dry_run=True)
+    assert mock_get.call_args.kwargs["current_prompt_version"] == PROMPT_VERSION
+
+
+def test_backfill_dry_run_reports_per_pm_counts_and_estimated_cost():
+    messages = [
+        _backfill_message(1, "A|to_start|Deck", "2026-10-01", pm_name="PM One"),
+        _backfill_message(2, "B|to_start|Fence", "2026-10-02", pm_name="PM Two"),
+        _backfill_message(3, "A|to_start|Deck", "2026-10-03", pm_name="PM One"),
+    ]
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "100"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=messages):
+        stats = backfill(dry_run=True)
+    assert stats["per_pm_counts"] == {"PM One": 2, "PM Two": 1}
+    assert stats["would_analyze"] == 3
+    assert stats["estimated_cost"] > 0
+
+
+def test_backfill_dry_run_makes_no_api_call():
+    messages = [_backfill_message(1, "A|to_start|Deck", "2026-10-01")]
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "100"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=messages), \
+         patch("agents.casey.analyze.call_model") as mock_call:
+        backfill(dry_run=True)
+    mock_call.assert_not_called()
+
+
+def test_pm_call_lines_never_contribute_to_backfill_scoring():
+    # A call row whose body_text mixes PM/Customer lines must only ever
+    # have its Customer: lines scored, exactly as analyze_one() already
+    # guarantees via split_call_transcript — covered end to end here
+    # through backfill's own message-processing path.
+    message = _backfill_message(
+        1, "A|to_start|Deck", "2026-10-01",
+        body_text="PM: let's schedule a refund call\nCustomer: ok sounds good",
+    )
+    captured = {}
+
+    def fake_call_model(system, user_message, model, max_tokens, _sleep=None):
+        captured["user_message"] = user_message
+        return {"usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "tool_use", "name": "submit_analysis", "input": _valid_output(evidence_quote="ok sounds good")}]}
+
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "100"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=[message]), \
+         patch("db.state_store.get_message_history", return_value=[]), \
+         patch("db.state_store.get_open_flag_for_job", return_value=None), \
+         patch("db.state_store.save_analysis"), \
+         patch("agents.casey.analyze.call_model", fake_call_model):
+        backfill(dry_run=False)
+    target_section = captured["user_message"][captured["user_message"].index(CUSTOMER_MESSAGE_OPEN_DELIM):]
+    assert "refund call" not in target_section
