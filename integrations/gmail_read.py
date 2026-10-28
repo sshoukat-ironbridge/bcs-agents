@@ -131,6 +131,34 @@ def get_message(mailbox: str, message_id: str, _sleep=time.sleep) -> dict:
     return data
 
 
+def get_message_metadata(mailbox: str, message_id: str, _sleep=time.sleep) -> dict:
+    """Headers only (format=metadata, no body) — for an outgoing email we
+    store as metadata only (Stage 10a channel rule): time, thread,
+    recipients, subject, no body."""
+    service = _get_service(mailbox)
+
+    def _call():
+        return service.users().messages().get(
+            userId="me", id=message_id, format="metadata",
+            metadataHeaders=["From", "To", "Cc", "Subject", "Date"],
+        ).execute(num_retries=0)
+
+    data = _with_retry(_call, _sleep=_sleep)
+    logger.info(f"get_message_metadata(mailbox={mailbox}, message_id={message_id}): fetched")
+    return data
+
+
+def check_mailbox(mailbox: str, _sleep=time.sleep) -> "tuple[bool, str]":
+    """messages.list(maxResults=1) as a cheap "can we even open this
+    mailbox" probe. Returns (ok, error_message) — never raises, so a
+    failing mailbox never crashes a coverage report or an ingest run."""
+    try:
+        list_messages(mailbox, query="", max_results=1, _sleep=_sleep)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 def get_thread(mailbox: str, thread_id: str, _sleep=time.sleep) -> dict:
     """Full thread resource (format=full) for one thread id."""
     service = _get_service(mailbox)

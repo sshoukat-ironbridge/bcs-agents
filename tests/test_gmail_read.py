@@ -2,7 +2,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from integrations.gmail_read import list_messages, get_message, get_thread, GmailReadError
+from integrations.gmail_read import (
+    list_messages, get_message, get_thread, get_message_metadata, check_mailbox, GmailReadError,
+)
 
 
 class _FakeHttpError(Exception):
@@ -147,6 +149,29 @@ def test_module_never_calls_send_or_modify_methods():
                        "messages().batchModify", "messages().batchDelete",
                        "labels().create", "labels().update", "labels().delete"):
         assert forbidden not in source
+
+
+def test_get_message_metadata_requests_metadata_format_only():
+    service = _fake_service(get_result={"id": "1", "payload": {"headers": []}})
+    with patch("integrations.gmail_read._get_service", return_value=service):
+        get_message_metadata("mb@example.com", "1", _sleep=lambda s: None)
+    kwargs = service.users.return_value.messages.return_value.get.call_args.kwargs
+    assert kwargs["format"] == "metadata"
+
+
+def test_check_mailbox_ok():
+    service = _fake_service(list_pages=[{"messages": [{"id": "1"}]}])
+    with patch("integrations.gmail_read._get_service", return_value=service):
+        ok, error = check_mailbox("mb@example.com", _sleep=lambda s: None)
+    assert ok is True
+    assert error == ""
+
+
+def test_check_mailbox_never_raises_on_failure():
+    with patch("integrations.gmail_read._get_service", side_effect=GmailReadError("boom")):
+        ok, error = check_mailbox("mb@example.com", _sleep=lambda s: None)
+    assert ok is False
+    assert "boom" in error
 
 
 def test_log_messages_never_contain_subject_or_body(caplog):
