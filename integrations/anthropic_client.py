@@ -47,6 +47,7 @@ def call_with_tool(
     tool_name: str,
     tool_description: str,
     input_schema: dict[str, Any],
+    temperature: "float | None" = None,
     _sleep=time.sleep,
 ) -> dict[str, Any]:
     """POSTs to /v1/messages so Anthropic returns one tool_use block shaped
@@ -85,6 +86,8 @@ def call_with_tool(
         # and keeps reasoning-token cost down.
         "output_config": {"effort": "low"},
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:

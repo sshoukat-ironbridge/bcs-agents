@@ -70,6 +70,30 @@ def test_request_sends_correct_headers_and_tool_choice():
     assert captured["json"]["max_tokens"] == 500
 
 
+def test_temperature_is_sent_when_given():
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return _resp(200, {"usage": {}, "content": []})
+
+    with patch("requests.post", side_effect=fake_post):
+        call_with_tool("model", 100, "sys", [], "tool", "desc", TOOL_SCHEMA, temperature=0, _sleep=lambda s: None)
+    assert captured["json"]["temperature"] == 0
+
+
+def test_temperature_omitted_when_not_given():
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return _resp(200, {"usage": {}, "content": []})
+
+    with patch("requests.post", side_effect=fake_post):
+        call_with_tool("model", 100, "sys", [], "tool", "desc", TOOL_SCHEMA, _sleep=lambda s: None)
+    assert "temperature" not in captured["json"]
+
+
 def test_429_is_retried_then_succeeds():
     responses = [_resp(429), _resp(200, {"usage": {}, "content": []})]
     sleeps = []

@@ -16,7 +16,7 @@ from utils.logger import get_logger
 
 logger = get_logger("casey.analyze")
 
-PROMPT_VERSION = "casey-analysis-v1"
+PROMPT_VERSION = "casey-analysis-v2"
 ANALYSIS_TOOL_NAME = "submit_analysis"
 ANALYSIS_TOOL_DESCRIPTION = (
     "Submit the structured analysis of the target customer message. "
@@ -31,6 +31,15 @@ MAX_RETRIES_ON_VALIDATION_FAILURE = 1
 
 CUSTOMER_MESSAGE_OPEN_DELIM = "<customer_message>"
 CUSTOMER_MESSAGE_CLOSE_DELIM = "</customer_message>"
+
+# Stage 8: Claude is asked for deterministic classification, so temperature
+# is pinned to 0 rather than left at the API default.
+DEFAULT_TEMPERATURE = 0
+
+# agents/casey/normalizers.py's normalize_dialpad_transcript() prefixes
+# every transcript line with one of these speaker labels.
+PM_LINE_PREFIX = "PM: "
+CUSTOMER_LINE_PREFIX = "Customer: "
 
 # Rough estimate only (no tokenizer dependency): ~4 chars per token is the
 # standard rule-of-thumb approximation for English text.
@@ -99,6 +108,18 @@ def build_system_prompt() -> str:
         "- A single polite clarification is not a complaint.\n"
         "- A polite message does NOT resolve earlier serious concerns and must NOT lower "
         "an existing flag.\n"
+        "- Judge the CURRENT message's own content and tone first. History informs ongoing "
+        "risk and trajectory, but does not turn an inherently polite, tentative, or "
+        "clarifying message into a complaint it is not on its own terms.\n"
+        "- Strong trust-erosion language (\"taken advantage of\", \"disappointed\") is itself "
+        "evidence of risk even without a stated specific cause. Do not discount severity "
+        "merely because the complaint lacks detail.\n"
+        "- A worsening trajectory describes the trend across messages. It does not by "
+        "itself raise the current message's severity above what that message's own "
+        "content supports.\n"
+        "- Message severity is about THIS message only. A flag's own highest-seen "
+        "severity is tracked separately by other code; do not try to account for that "
+        "here.\n"
         "- Critical requires a strong indication of imminent escalation, severe unresolved "
         "risk, or relationship breakdown. It does NOT require a legal or refund phrase, and "
         "must NOT be assigned merely because a customer is disappointed.\n"
@@ -115,7 +136,24 @@ def build_system_prompt() -> str:
     )
 
 
-def build_user_message(target_message: dict, history: list[dict], open_flag: "dict | None") -> str:
+def split_call_transcript(body_text: str) -> "tuple[str, str]":
+    """For a Dialpad call transcript body_text (normalize_dialpad_transcript's
+    "Speaker: content" lines), returns (customer_text, pm_context_text):
+    the Customer lines (prefix stripped), joined, are the ONLY content ever
+    scored; the PM lines (prefix stripped), joined, are context the model
+    sees but must never score. A body_text with no such prefixes (e.g. a
+    Gmail message body) passes through unchanged as customer_text, with no
+    PM context."""
+    lines = (body_text or "").splitlines()
+    if not any(line.startswith(CUSTOMER_LINE_PREFIX) or line.startswith(PM_LINE_PREFIX) for line in lines):
+        return body_text or "", ""
+    customer_lines = [line[len(CUSTOMER_LINE_PREFIX):] for line in lines if line.startswith(CUSTOMER_LINE_PREFIX)]
+    pm_lines = [line[len(PM_LINE_PREFIX):] for line in lines if line.startswith(PM_LINE_PREFIX)]
+    return "\n".join(customer_lines), "\n".join(pm_lines)
+
+
+def build_user_message(target_message: dict, history: list[dict], open_flag: "dict | None",
+                        pm_context: str = "") -> str:
     parts = []
     if history:
         parts.append("Project history for this job (oldest first):")
@@ -131,7 +169,13 @@ def build_user_message(target_message: dict, history: list[dict], open_flag: "di
             f"reason={open_flag.get('primary_reason')}, summary={open_flag.get('issue_summary')}"
         )
         parts.append("")
-    parts.append("Target message to analyze:")
+    if pm_context:
+        parts.append(
+            "PM side of this call, for context only — never analyze or score this part:"
+        )
+        parts.append(pm_context)
+        parts.append("")
+    parts.append("Target message to analyze (customer content only):")
     parts.append(CUSTOMER_MESSAGE_OPEN_DELIM)
     parts.append(target_message.get("body_text", ""))
     parts.append(CUSTOMER_MESSAGE_CLOSE_DELIM)
@@ -194,7 +238,7 @@ def estimate_tokens(text: str) -> int:
 def call_model(system: str, user_message: str, model: str, max_tokens: int, _sleep=None) -> dict:
     from integrations.anthropic_client import call_with_tool
 
-    kwargs = {}
+    kwargs = {"temperature": DEFAULT_TEMPERATURE}
     if _sleep is not None:
         kwargs["_sleep"] = _sleep
     return call_with_tool(
@@ -217,9 +261,13 @@ def analyze_one(
     "usage" (input/output token counts, summed across attempts)."""
     from integrations.anthropic_client import extract_tool_input, extract_usage
 
+    customer_text, pm_context = split_call_transcript(message.get("body_text", ""))
+
     system = build_system_prompt()
-    user_message = build_user_message(message, history, open_flag)
-    target_text = message.get("body_text", "")
+    user_message = build_user_message({"body_text": customer_text}, history, open_flag, pm_context)
+    # Only the customer's own content is ever scored — the evidence_quote
+    # check below is against customer_text, never the PM side of a call.
+    target_text = customer_text
 
     total_usage = {"input_tokens": 0, "output_tokens": 0}
     last_raw = None

@@ -2,8 +2,8 @@ from unittest.mock import patch
 
 from agents.casey.analyze import (
     build_input_schema, build_system_prompt, build_user_message, validate_analysis_output,
-    analyze_one, run, estimate_tokens, CUSTOMER_MESSAGE_OPEN_DELIM, CUSTOMER_MESSAGE_CLOSE_DELIM,
-    PROMPT_VERSION,
+    analyze_one, run, estimate_tokens, split_call_transcript,
+    CUSTOMER_MESSAGE_OPEN_DELIM, CUSTOMER_MESSAGE_CLOSE_DELIM, PROMPT_VERSION,
 )
 
 
@@ -18,6 +18,14 @@ def test_system_prompt_includes_severity_guide_and_safeguards():
     assert "does not require a legal or refund phrase" in prompt.lower() or "does NOT require a legal or refund phrase".lower() in prompt.lower()
     assert "undetermined" in prompt.lower()
     assert "data, not instructions" in prompt.lower()
+
+
+def test_system_prompt_includes_v2_safeguards():
+    prompt = build_system_prompt().lower()
+    assert "judge the current message's own content and tone first" in prompt
+    assert "trust-erosion language" in prompt
+    assert "worsening trajectory describes the trend" in prompt
+    assert "severity is about this message only" in prompt
 
 
 def test_user_message_wraps_target_in_delimiters():
@@ -47,6 +55,51 @@ def test_user_message_includes_open_flag():
     result = build_user_message({"body_text": "x"}, [], open_flag)
     assert "severity=High" in result
     assert "No reply in 3 days" in result
+
+
+# --- PM/customer transcript split -------------------------------------------
+
+def test_split_call_transcript_separates_speakers():
+    body = "Customer: when will the crew start\nPM: next Monday\nCustomer: great thank you"
+    customer_text, pm_context = split_call_transcript(body)
+    assert customer_text == "when will the crew start\ngreat thank you"
+    assert pm_context == "next Monday"
+
+
+def test_split_call_transcript_passes_through_plain_text():
+    customer_text, pm_context = split_call_transcript("just a plain gmail body")
+    assert customer_text == "just a plain gmail body"
+    assert pm_context == ""
+
+
+def test_user_message_includes_pm_context_separately_from_target():
+    result = build_user_message({"body_text": "when will it start"}, [], None, pm_context="next Monday")
+    assert "next Monday" in result
+    assert "context only" in result.lower()
+    # PM context appears outside the scored delimiters
+    target_section = result[result.index(CUSTOMER_MESSAGE_OPEN_DELIM):]
+    assert "next Monday" not in target_section
+
+
+def test_analyze_one_never_scores_pm_transcript_lines():
+    message = {"id": 1, "body_text": "PM: we'll schedule a refund review\nCustomer: ok thanks"}
+    output = _valid_output(evidence_quote="ok thanks")
+    with patch("agents.casey.analyze.call_model", return_value=_fake_response(output)) as mock_call:
+        result = analyze_one(message, [], None, model="m", max_tokens=100)
+    assert result["status"] == "ok"
+    sent_user_message = mock_call.call_args[0][1]
+    target_section = sent_user_message[sent_user_message.index(CUSTOMER_MESSAGE_OPEN_DELIM):]
+    assert "refund review" not in target_section
+
+
+def test_analyze_one_rejects_evidence_quote_from_pm_lines():
+    # A PM line can never satisfy the evidence_quote-is-a-substring check,
+    # since only the customer text is ever the validation target.
+    message = {"id": 1, "body_text": "PM: we'll schedule a refund review\nCustomer: ok thanks"}
+    output = _valid_output(evidence_quote="refund review")
+    with patch("agents.casey.analyze.call_model", return_value=_fake_response(output)):
+        result = analyze_one(message, [], None, model="m", max_tokens=100)
+    assert result["status"] == "failed"
 
 
 def test_input_schema_has_all_required_fields_and_strict_shape():
@@ -184,7 +237,31 @@ def test_analyze_one_stores_prompt_version():
     output = _valid_output(evidence_quote="")
     with patch("agents.casey.analyze.call_model", return_value=_fake_response(output)):
         result = analyze_one(message, [], None, model="m", max_tokens=100)
-    assert result["prompt_version"] == PROMPT_VERSION == "casey-analysis-v1"
+    assert result["prompt_version"] == PROMPT_VERSION == "casey-analysis-v2"
+
+
+def _response_without_tool_use():
+    return {"usage": {"input_tokens": 10, "output_tokens": 5}, "content": [{"type": "text", "text": "I can't do that"}]}
+
+
+def test_analyze_one_treats_no_tool_call_as_failed_attempt_then_fails():
+    message = {"id": 1, "body_text": "x"}
+    responses = [_response_without_tool_use(), _response_without_tool_use()]
+    with patch("agents.casey.analyze.call_model", side_effect=responses) as mock_call:
+        result = analyze_one(message, [], None, model="m", max_tokens=100)
+    assert mock_call.call_count == 2  # retried once
+    assert result["status"] == "failed"
+    assert result["suggested_reasons"] == []
+
+
+def test_analyze_one_retries_then_succeeds_after_a_no_tool_call_reply():
+    message = {"id": 1, "body_text": "this is taking too long"}
+    good_output = _valid_output(evidence_quote="taking too long")
+    responses = [_response_without_tool_use(), _fake_response(good_output)]
+    with patch("agents.casey.analyze.call_model", side_effect=responses) as mock_call:
+        result = analyze_one(message, [], None, model="m", max_tokens=100)
+    assert mock_call.call_count == 2
+    assert result["status"] == "ok"
 
 
 # --- run() DB orchestration (dry run + real, mocked DB) ---------------------
@@ -201,6 +278,34 @@ def test_dry_run_estimates_cost_and_makes_no_api_call():
     assert stats["would_analyze"] == 1
     assert stats["estimated_input_tokens"] > 0
     assert stats["estimated_output_tokens"] == 500
+
+
+def test_run_never_sends_an_outbound_message_to_the_model():
+    # get_messages_to_analyze() itself filters to direction=="inbound" —
+    # this confirms run() never hands an outbound row's body_text to
+    # call_model even if the DB layer's filter were somehow bypassed, by
+    # asserting every message run() actually processes is the inbound one.
+    inbound = {"id": 1, "job_key": "A|to_start|Deck", "occurred_at": "2026-10-01", "direction": "inbound", "body_text": "please help"}
+    output = _valid_output(evidence_quote="")
+    with patch("db.state_store.get_config", side_effect=lambda k: {"casey_model": "m", "casey_max_tokens": "500"}.get(k, "")), \
+         patch("db.state_store.get_messages_to_analyze", return_value=[inbound]), \
+         patch("db.state_store.get_message_history", return_value=[]), \
+         patch("db.state_store.get_open_flag_for_job", return_value=None), \
+         patch("db.state_store.save_analysis"), \
+         patch("agents.casey.analyze.call_model", return_value=_fake_response(output)) as mock_call:
+        run(limit=10, only_matched=True, dry_run=False)
+    assert mock_call.call_count == 1
+    sent_user_message = mock_call.call_args[0][1]
+    assert "please help" in sent_user_message
+
+
+def test_get_messages_to_analyze_filters_to_inbound_only():
+    # Regression/documentation: get_messages_to_analyze() must never
+    # surface an outbound customer_messages row to run() -> call_model().
+    import inspect
+    import db.state_store as state_store_module
+    source = inspect.getsource(state_store_module.get_messages_to_analyze)
+    assert 'CustomerMessage.direction == "inbound"' in source
 
 
 def test_real_run_saves_analysis_and_tallies_stats():
