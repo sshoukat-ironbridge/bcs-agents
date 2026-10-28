@@ -1650,6 +1650,22 @@ _CUSTOMER_MESSAGE_FIELDS = {
 }
 
 
+def get_customer_message_raw_ref(source: str, external_id: str) -> "str | None":
+    """Fetches an existing row's raw_ref before an upsert, so a caller
+    (e.g. ingest_gmail.py, when the same Gmail message is visible from
+    two mailboxes) can merge new context into it instead of the upsert
+    silently overwriting it."""
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            row = s.query(CustomerMessage).filter_by(source=source, external_id=external_id).first()
+            return row.raw_ref if row else None
+    except Exception as e:
+        logger.error(f"get_customer_message_raw_ref({source}, {external_id}): {e}")
+        return None
+
+
 def upsert_customer_message(row: dict) -> bool:
     """Upserts on (source, external_id) — the same call/email/SMS ingested
     twice updates the existing row instead of duplicating it. Returns True
