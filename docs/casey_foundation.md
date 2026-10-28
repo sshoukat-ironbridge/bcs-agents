@@ -911,3 +911,101 @@ planned (Slack channel + DM + 1 email), all correctly stored
 `status="suppressed"`, `reason="backfill"` (confirmed directly in
 Postgres) since `casey_live_since` is still unset locally. No message
 text was printed anywhere in either command's output.
+
+## Stage 8: prompt v2/v3, wider evaluation, and notification sending
+
+### Prompt revision (casey-analysis-v2, then v3)
+
+v2 added four safeguards: judge the current message's own content and
+tone first (history informs trajectory, not what the message itself is);
+strong trust-erosion language ("taken advantage of") is evidence even
+without a stated cause; a worsening trajectory describes the trend, not
+license to raise this message's own severity; severity is about this
+message only (the flag's own highest-seen severity is tracked
+separately — `flag_logic.py` is unchanged).
+
+**Temperature**: the spec asked for `temperature: 0` if the configured
+model accepts it. **It does not** — confirmed live: `claude-sonnet-5-5`
+returns `400 "`temperature` is deprecated for this model."` for this
+model family. `integrations/anthropic_client.py` still accepts an
+optional `temperature` kwarg (for a model that does accept it), but
+`agents/casey/analyze.py` never passes it (`DEFAULT_TEMPERATURE =
+None`).
+
+**Gate (calibration ≥7/8 by majority, zero missed/false Critical, ≤1
+synthetic false positive) — round 1 (v2) failed** at 5/8 calibration:
+- Caroline Day's case failed validation on both attempts because the
+  model's `evidence_quote` used an ellipsis to abbreviate a long quote,
+  which can never be an exact substring — the harness recorded "no
+  flag" for a failed analysis, not a real severity miss.
+- Danielle Ewen 10/05 and Julie Harrison 10/09 kept getting pulled above
+  what each message's own content supports by prior-message history,
+  because an older safeguard ("assess the message AND history together")
+  gave the model room to do exactly that, even after the v2 bullets.
+
+**v3 (the one allowed revision)**: system prompt now requires
+`evidence_quote` to be copied verbatim with no ellipsis (or left empty);
+added one safeguard that the severity *number* must be justified by the
+message's own content, with history only ever informing trajectory/root
+cause. **Round 2 (v3) gate: PASS** — 7/8 calibration, 18/18 synthetic,
+zero missed/false Critical, 0 synthetic false positives. One calibration
+miss remains (Julie Harrison 10/09: got High, expected Medium) and was
+*not* further tuned, per "do not keep tuning beyond [one revision]."
+
+### PM/customer transcript split
+
+`agents/casey/analyze.py::split_call_transcript()` splits a Dialpad call
+transcript's `"PM: ..."` / `"Customer: ..."` lines (from
+`normalize_dialpad_transcript()`): only the Customer lines are ever
+scored or eligible for `evidence_quote`; the PM lines are given to the
+model as context only. Outbound Gmail messages are never analyzed at
+all — `get_messages_to_analyze()` already filters to `direction ==
+"inbound"`.
+
+### Config keys added
+
+- `casey_notify_enabled` (default `false`) — gates the `notify` stage in
+  `agents/casey/main.py`.
+- `casey_dashboard_base_url` (default empty) — builds a flag's
+  notification link as `<base>/casey/flags/<id>`; no link until set.
+- `casey_notify_max_retries` (default `3`) — a failed send returns to
+  `status="planned"` and is retried on the next scheduled run, up to
+  this many attempts, then becomes `status="failed"` permanently. The
+  scheduled run interval itself is the backoff.
+- `casey_slack_test_channel` (default empty) — every Slack send (channel
+  or DM) goes here instead of the real destination unless
+  `CASEY_ENV=production`.
+
+### Sending notifications (`agents/casey/notify.py`)
+
+Sends `casey_notifications` rows with `status="planned"`. Gated on
+`utils.outbound.outbound_enabled()` (silent_mode/`OCA_DRY_RUN`) and
+`casey_live_since` being set — either one being false/unset leaves every
+row untouched. Real recipients (PM's own Slack/email, or the configured
+ana_maria/tatiana/chris addresses) are only used when `CASEY_ENV` is
+exactly `"production"`; otherwise every email goes to
+`casey_email_override` (refused if empty — no email is ever guessed at)
+and every Slack send goes to `casey_slack_test_channel`. A Slack DM is
+always skipped (in either mode) when the PM has no configured
+`slack_user_id`. Each row is claimed atomically (`planned -> sending` in
+one conditional `UPDATE ... WHERE status = 'planned'`) so two concurrent
+runs can never double-send.
+
+**Testing it locally**: `python scripts/casey_send_test.py` builds a
+synthetic in-memory Critical flag (never written to the DB), plans its
+notifications, and prints exactly what would be sent and to whom after
+the override/test-channel rules resolve — with `--yes` it sends for
+real through the same gate, refusing to run unless `silent_mode` is
+false and `CASEY_ENV` is unset.
+
+### Go-live checklist (updated)
+
+1. Set `casey_slack_test_channel` and run `casey_send_test.py` (without
+   `--yes` first) to confirm routing locally.
+2. Set `casey_dashboard_base_url` so flag links resolve.
+3. Set `casey_live_since` (see above) when ready for real sends to
+   start.
+4. Set `CASEY_ENV=production` and the real `casey_email_*`/PM
+   `slack_user_id` values only when actually going live — until then,
+   every send this system makes is confined to the override/test
+   channel by construction.
