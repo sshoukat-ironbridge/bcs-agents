@@ -163,6 +163,7 @@ if _db_available:
         estimator_name  = Column(String, nullable=True)
         ingested_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         raw_ref         = Column(Text, nullable=True)
+        is_demo         = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
 
     class MessageAnalysis(Base):
         __tablename__ = "message_analyses"
@@ -187,6 +188,7 @@ if _db_available:
         status               = Column(String, nullable=False, default="ok")  # ok | failed
         raw_json             = Column(JSON, nullable=True)
         created_at           = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        is_demo              = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
 
     class CaseyFlag(Base):
         __tablename__ = "casey_flags"
@@ -223,6 +225,7 @@ if _db_available:
         resolution_reason   = Column(Text, nullable=True)
         resolved_by         = Column(String, nullable=True)
         notes               = Column(Text, nullable=True)
+        is_demo             = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
 
     class CaseyFlagEvent(Base):
         __tablename__ = "casey_flag_events"
@@ -238,6 +241,7 @@ if _db_available:
         actor      = Column(String, nullable=False)  # "casey" or a user name
         message_id = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
         created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+        is_demo    = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
 
     class CaseyNotification(Base):
         __tablename__ = "casey_notifications"
@@ -290,6 +294,7 @@ if _db_available:
         responded_at         = Column(DateTime(timezone=True), nullable=True)
         response_message_id  = Column(Integer, ForeignKey("customer_messages.id"), nullable=True)
         alert_notification_id = Column(Integer, ForeignKey("casey_notifications.id"), nullable=True)
+        is_demo              = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
 
     class IngestCursor(Base):
         __tablename__ = "ingest_cursors"
@@ -553,6 +558,15 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_notifications ALTER COLUMN attempts SET NOT NULL"))
             conn.commit()
 
+            # Stage 9: demo-mode flag on the tables the Casey dashboard reads.
+            for _demo_table in ("casey_flags", "casey_flag_events", "customer_messages",
+                                 "message_analyses", "casey_response_watches"):
+                conn.execute(text(f"ALTER TABLE {_demo_table} ADD COLUMN IF NOT EXISTS is_demo BOOLEAN"))
+                conn.execute(text(f"UPDATE {_demo_table} SET is_demo = FALSE WHERE is_demo IS NULL"))
+                conn.execute(text(f"ALTER TABLE {_demo_table} ALTER COLUMN is_demo SET DEFAULT FALSE"))
+                conn.execute(text(f"ALTER TABLE {_demo_table} ALTER COLUMN is_demo SET NOT NULL"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -659,6 +673,10 @@ def init_db() -> None:
                 # recipients are only used when CASEY_ENV=production;
                 # otherwise every Slack send goes to this test channel.
                 "casey_slack_test_channel": "",
+                # Stage 9: demo mode for the Casey dashboard — on by default
+                # locally so a fresh checkout shows seeded demo data, never
+                # real customer text, until explicitly turned off.
+                "casey_demo_mode": "true",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -723,6 +741,13 @@ def set_config(key: str, value: str) -> None:
             s.commit()
     except Exception as e:
         logger.error(f"set_config({key}): {e}")
+
+
+def casey_demo_mode() -> bool:
+    """True unless casey_demo_mode is explicitly set to "false" — on by
+    default so a fresh checkout never shows real customer text until
+    someone deliberately turns demo mode off."""
+    return (get_config("casey_demo_mode") or "true").strip().lower() != "false"
 
 
 def get_all_config() -> dict:
@@ -1646,7 +1671,7 @@ def get_open_response_watches() -> list[dict]:
         with _Session() as s:
             rows = (
                 s.query(CaseyResponseWatch)
-                .filter(CaseyResponseWatch.status.in_(["waiting", "overdue"]))
+                .filter(CaseyResponseWatch.status.in_(["waiting", "overdue"]), CaseyResponseWatch.is_demo == False)  # noqa: E712
                 .all()
             )
             return [
@@ -1878,6 +1903,7 @@ def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[
             q = s.query(CustomerMessage).filter(
                 CustomerMessage.direction == "inbound",
                 CustomerMessage.is_automated == False,
+                CustomerMessage.is_demo == False,
             )
             if only_matched:
                 q = q.filter(CustomerMessage.job_id.isnot(None))
@@ -1904,6 +1930,7 @@ def get_message_history(job_key: "str | None", before, limit: int = 10, since_da
                     CustomerMessage.job_key == job_key,
                     CustomerMessage.occurred_at < before,
                     CustomerMessage.occurred_at >= cutoff,
+                    CustomerMessage.is_demo == False,
                 )
                 .order_by(CustomerMessage.occurred_at.desc())
                 .limit(limit)
@@ -1940,7 +1967,7 @@ def get_open_flag_for_job(job_key: "str | None") -> "dict | None":
         with _Session() as s:
             row = (
                 s.query(CaseyFlag)
-                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None))
+                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None), CaseyFlag.is_demo == False)  # noqa: E712
                 .order_by(CaseyFlag.created_at.desc())
                 .first()
             )
@@ -2003,7 +2030,8 @@ def get_unprocessed_analyses() -> list[dict]:
             }
             rows = (
                 s.query(MessageAnalysis)
-                .filter(MessageAnalysis.red_flag_suggested == True, MessageAnalysis.status == "ok")  # noqa: E712
+                .filter(MessageAnalysis.red_flag_suggested == True, MessageAnalysis.status == "ok",  # noqa: E712
+                        MessageAnalysis.is_demo == False)
                 .order_by(MessageAnalysis.created_at.asc())
                 .all()
             )
@@ -2054,7 +2082,7 @@ def get_open_flags_for_job(job_key: "str | None") -> list[dict]:
         with _Session() as s:
             rows = (
                 s.query(CaseyFlag)
-                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None))
+                .filter(CaseyFlag.job_key == job_key, CaseyFlag.closed_at.is_(None), CaseyFlag.is_demo == False)  # noqa: E712
                 .order_by(CaseyFlag.created_at.asc())
                 .all()
             )

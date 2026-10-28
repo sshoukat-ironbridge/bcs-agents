@@ -51,3 +51,21 @@ def test_can_view_project_false_for_others():
 
 def test_can_view_project_true_for_admin():
     assert can_view_project("admin", "", PROJECTS[1]) is True
+
+
+def test_visibility_field_none_for_full_visibility_roles():
+    from agents.casey.access import visibility_field
+    assert visibility_field("admin") is None
+    assert visibility_field("leadership") is None
+    assert visibility_field("cx_coordinator") is None
+
+
+def test_visibility_field_for_restricted_roles():
+    from agents.casey.access import visibility_field
+    assert visibility_field("pm") == "pm_name"
+    assert visibility_field("estimator") == "estimator_name"
+
+
+def test_visibility_field_none_for_unknown_role():
+    from agents.casey.access import visibility_field
+    assert visibility_field("guest") is None

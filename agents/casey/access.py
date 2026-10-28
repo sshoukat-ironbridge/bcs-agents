@@ -41,3 +41,14 @@ def visible_projects(role: str, linked_name: str, projects: list[dict]) -> list[
 def can_view_project(role: str, linked_name: str, project: dict) -> bool:
     """Single-project version of visible_projects(), for a detail page."""
     return bool(visible_projects(role, linked_name, [project]))
+
+
+def visibility_field(role: str) -> "str | None":
+    """The project-dict/row field a restricted role is matched against
+    ("pm_name" or "estimator_name"), or None for a full-visibility role
+    or an unknown one. Lets a SQL query layer (dashboard/casey_queries.py)
+    build its own WHERE clause from the same role->field mapping
+    visible_projects() uses, without duplicating it."""
+    if role in FULL_VISIBILITY_ROLES:
+        return None
+    return _LINKED_FIELD_BY_ROLE.get(role)
