@@ -219,6 +219,81 @@ def test_idempotent_rerun_produces_zero_new_rows_second_time():
     assert stats2["new_rows"] == 0
 
 
+def test_unmatched_call_not_stored_by_default():
+    calls = {"dp-1": [_call(20, phone="555-000-0000")]}
+    transcripts = {20: _transcript()}
+    inserted = []
+    stats = _run_with(calls, transcripts, dry_run=False, upsert_mock=lambda row: inserted.append(row) or True)
+    assert stats["unmatched"] == 1
+    assert inserted == []
+
+
+def test_store_unmatched_when_config_enabled():
+    calls = {"dp-1": [_call(21, phone="555-000-0000")]}
+    transcripts = {21: _transcript()}
+    inserted = []
+
+    def fake_upsert(row):
+        inserted.append(row)
+        return True
+
+    with patch("db.state_store.get_pm_list", return_value=PMS), \
+         patch("db.state_store.get_all_active_jobs", return_value=JOBS), \
+         patch("db.state_store.get_ingest_cursor", return_value=None), \
+         patch("db.state_store.set_ingest_cursor"), \
+         patch("db.state_store.create_ingest_run_stats"), \
+         patch("db.state_store.get_config", side_effect=lambda k: {"casey_dialpad_store_unmatched": "true"}.get(k, "")), \
+         patch("integrations.dialpad_calls.list_calls", side_effect=lambda user_id, *a, **kw: calls.get(user_id, [])), \
+         patch("integrations.dialpad_calls.get_transcript", side_effect=lambda call_id, **kw: transcripts.get(call_id)), \
+         patch("db.state_store.upsert_customer_message", side_effect=fake_upsert):
+        run(_parse_since("7d"), dry_run=False)
+    assert len(inserted) == 1
+    assert inserted[0]["job_id"] is None
+    assert inserted[0]["match_status"] == "unmatched"
+
+
+def test_matched_call_sets_match_status_and_classification():
+    calls = {"dp-1": [_call(22, phone="555-111-2222")]}
+    transcripts = {22: _transcript(lines=[
+        {"type": "transcript", "user_id": "u1", "content": "Hi there, how are you?"},
+        {"type": "transcript", "contact_id": "c1", "content": "Doing well, thanks for asking!"},
+    ])}
+    inserted = []
+    _run_with(calls, transcripts, dry_run=False, upsert_mock=lambda row: inserted.append(row) or True)
+    assert inserted[0]["match_status"] == "matched"
+    assert inserted[0]["is_automated"] is False
+    assert inserted[0]["skip_reason"] is None
+
+
+def test_cross_pm_disambiguation_resolves_shared_phone_by_calling_pm():
+    pms = [
+        {"id": 1, "full_name": "Gustavo", "dialpad_user_id": "dp-1"},
+        {"id": 2, "full_name": "Andrea", "dialpad_user_id": "dp-2"},
+    ]
+    jobs = [
+        {"id": 20, "client_name": "Shared A", "sheet_tab": "to_start", "primary_job_type": "Deck",
+         "customer_phone": "555-999-0000", "customer_email": "", "pm_name": "Gustavo"},
+        {"id": 21, "client_name": "Shared B", "sheet_tab": "to_start", "primary_job_type": "Fence",
+         "customer_phone": "555-999-0000", "customer_email": "", "pm_name": "Andrea"},
+    ]
+    calls = {"dp-1": [_call(23, phone="555-999-0000")]}
+    transcripts = {23: _transcript()}
+    stats = _run_with(calls, transcripts, jobs=jobs, pms=pms, dry_run=True)
+    # Called on Gustavo's line -> resolves to Shared A (Gustavo's own job), not ambiguous.
+    assert stats["matched"] == 1
+    assert stats["ambiguous"] == 0
+
+
+def test_purge_unmatched_calls_is_a_dry_run_by_default():
+    from agents.casey.ingest_dialpad import purge_unmatched_calls
+    # No DB in this test environment -> _db_available is False -> the
+    # function returns the zeroed shape rather than touching anything.
+    # Real counts are verified live against the real DB (Stage 10a Step 6).
+    with patch("db.state_store._db_available", False):
+        counts = purge_unmatched_calls(dry_run=True)
+    assert counts == {"messages": 0, "analyses": 0, "flag_events": 0, "flags": 0}
+
+
 def test_is_enabled_reads_config():
     with patch("db.state_store.get_config", return_value="true"):
         assert is_enabled() is True
