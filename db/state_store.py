@@ -17,6 +17,7 @@ try:
     from sqlalchemy import (
         create_engine, Column, Integer, String, DateTime, Date,
         Boolean, UniqueConstraint, text, Text, ForeignKey, JSON, Float, Index,
+        or_, and_,
     )
     from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -164,6 +165,14 @@ if _db_available:
         ingested_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         raw_ref         = Column(Text, nullable=True)
         is_demo         = Column(Boolean, nullable=False, default=False)  # Stage 9: demo-mode seed data
+        # Stage 10a: matched | ambiguous | unmatched, set from the match
+        # result ingest already computes — previously thrown away (both
+        # ambiguous and unmatched stored job_id=None with no way to tell
+        # them apart after the fact; see docs/casey_foundation.md).
+        match_status    = Column(String, nullable=True)
+        # Why this row is never analyzed even though it's stored, e.g.
+        # "no_customer_text" — reused by get_messages_to_analyze().
+        skip_reason     = Column(String, nullable=True)
 
     class MessageAnalysis(Base):
         __tablename__ = "message_analyses"
@@ -301,6 +310,19 @@ if _db_available:
         source       = Column(String, primary_key=True)
         cursor_value = Column(Text, nullable=True)
         updated_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    class IngestRunStats(Base):
+        """One row per mailbox (Gmail) or PM (Dialpad) per ingest run —
+        Stage 10a: the counters a run computes in memory (seen, skipped,
+        matched/ambiguous/unmatched, ...) were previously discarded the
+        moment the process exited (see docs/casey_foundation.md)."""
+        __tablename__ = "ingest_run_stats"
+        id              = Column(Integer, primary_key=True, autoincrement=True)
+        source          = Column(String, nullable=False)  # gmail | dialpad_call
+        mailbox_or_pm   = Column(String, nullable=True)
+        started_at      = Column(DateTime(timezone=True), nullable=False)
+        finished_at     = Column(DateTime(timezone=True), nullable=True)
+        counters        = Column(JSON, nullable=True)
 
     class WebhookEvent(Base):
         __tablename__ = "webhook_events"
@@ -567,6 +589,11 @@ def init_db() -> None:
                 conn.execute(text(f"ALTER TABLE {_demo_table} ALTER COLUMN is_demo SET NOT NULL"))
             conn.commit()
 
+            # Stage 10a: match_status / skip_reason on customer_messages.
+            conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS match_status TEXT"))
+            conn.execute(text("ALTER TABLE customer_messages ADD COLUMN IF NOT EXISTS skip_reason TEXT"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -677,6 +704,14 @@ def init_db() -> None:
                 # locally so a fresh checkout shows seeded demo data, never
                 # real customer text, until explicitly turned off.
                 "casey_demo_mode": "true",
+                # Stage 10a: mailboxes come from pm_config emails by
+                # default; "manual" keeps using casey_gmail_mailboxes.
+                "casey_gmail_mailboxes_mode": "pm_config",
+                "casey_gmail_address_batch_size": "15",
+                # A Dialpad call matching no active job is never stored
+                # locally — mirrors casey_gmail_store_unmatched.
+                "casey_dialpad_store_unmatched": "false",
+                "casey_analysis_max_cost_usd": "15",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -1583,6 +1618,27 @@ def set_ingest_cursor(source: str, cursor_value: str) -> None:
         logger.error(f"set_ingest_cursor({source}): {e}")
 
 
+def create_ingest_run_stats(row: dict) -> "int | None":
+    """One row per mailbox (Gmail) or PM (Dialpad) per ingest run — see
+    IngestRunStats. Never raises; an audit/reporting write failing here
+    must never block the ingest run itself."""
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            entry = IngestRunStats(
+                source=row["source"], mailbox_or_pm=row.get("mailbox_or_pm"),
+                started_at=row["started_at"], finished_at=row.get("finished_at"),
+                counters=row.get("counters") or {},
+            )
+            s.add(entry)
+            s.commit()
+            return entry.id
+    except Exception as e:
+        logger.error(f"create_ingest_run_stats({row.get('source')}, {row.get('mailbox_or_pm')}): {e}")
+        return None
+
+
 # --- customer_messages (Casey ingestion agents) -----------------------------
 
 _CUSTOMER_MESSAGE_FIELDS = {
@@ -1590,6 +1646,7 @@ _CUSTOMER_MESSAGE_FIELDS = {
     "customer_email", "customer_phone", "duration_ms", "call_state",
     "direction", "occurred_at", "sender", "subject", "body_text",
     "is_automated", "pm_name", "estimator_name", "raw_ref",
+    "match_status", "skip_reason",
 }
 
 
@@ -1740,11 +1797,14 @@ def get_response_candidates(thread_id: "str | None", job_key: "str | None") -> l
                     )
                     .all()
                 )
-                candidates.extend(
-                    {"source": "dialpad_call", "direction": "outbound", "job_key": r.job_key,
-                     "occurred_at": r.occurred_at, "duration_ms": r.duration_ms, "message_id": r.id}
-                    for r in call_rows
-                )
+                from agents.casey.normalizers import classify_call
+                for r in call_rows:
+                    classification = classify_call(r.direction, r.duration_ms, (r.body_text or "").splitlines())
+                    candidates.append({
+                        "source": "dialpad_call", "direction": "outbound", "job_key": r.job_key,
+                        "occurred_at": r.occurred_at, "duration_ms": r.duration_ms, "message_id": r.id,
+                        "is_automated": r.is_automated, "customer_words": classification["customer_words"],
+                    })
             return candidates
     except Exception as e:
         logger.error(f"get_response_candidates: {e}")
@@ -1905,22 +1965,38 @@ def _customer_message_to_dict(r) -> dict:
         "customer_phone": r.customer_phone, "direction": r.direction, "occurred_at": r.occurred_at,
         "sender": r.sender, "subject": r.subject, "body_text": r.body_text or "",
         "is_automated": r.is_automated, "pm_name": r.pm_name, "estimator_name": r.estimator_name,
+        "match_status": r.match_status, "skip_reason": r.skip_reason,
     }
 
 
 def get_messages_to_analyze(limit: int = 10, only_matched: bool = True) -> list[dict]:
-    """Inbound, non-automated customer_messages rows with no
-    message_analyses row yet, oldest first (deterministic FIFO), capped
-    at `limit`. only_matched=True restricts to rows with a resolved
-    job_id (never analyzes a message Casey can't tie to a project)."""
+    """Candidates for agents/casey/analyze.py, oldest first (deterministic
+    FIFO), capped at `limit`. only_matched=True restricts to rows with a
+    resolved job_id (never analyzes a message Casey can't tie to a
+    project).
+
+    Channel rules (Stage 10a): Gmail is analyzed inbound only — an
+    outbound email is stored as metadata only and has no body to score.
+    A Dialpad call is analyzed in EITHER direction (the model only ever
+    scores the customer's lines within it; see
+    agents/casey/analyze.py::split_call_transcript). Never automated
+    (voicemail/greeting) and never skip_reason (e.g. no_customer_text,
+    or an outgoing-email metadata-only row). SMS is out of scope until
+    its own stage, so it's excluded by only naming gmail/dialpad_call
+    here rather than relying on direction/skip_reason alone."""
     if not _db_available:
         return []
     try:
         with _Session() as s:
             analyzed_ids = {row[0] for row in s.query(MessageAnalysis.message_id).all()}
             q = s.query(CustomerMessage).filter(
-                CustomerMessage.direction == "inbound",
+                CustomerMessage.source.in_(["gmail", "dialpad_call"]),
+                or_(
+                    and_(CustomerMessage.source == "gmail", CustomerMessage.direction == "inbound"),
+                    CustomerMessage.source == "dialpad_call",
+                ),
                 CustomerMessage.is_automated == False,
+                CustomerMessage.skip_reason.is_(None),
                 CustomerMessage.is_demo == False,
             )
             if only_matched:

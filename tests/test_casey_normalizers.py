@@ -272,3 +272,80 @@ def test_count_ambiguous_contacts():
     assert result["ambiguous_email_count"] == 1
     assert result["ambiguous_phone_count"] == 0
     assert "a@example.com" in result["ambiguous_emails"]
+
+
+# --- classify_call (Stage 10a, from the call audit) --------------------------
+
+from agents.casey.normalizers import classify_call  # noqa: E402
+
+
+def test_classify_call_real_conversation_both_sides():
+    # Shape of the audit's inbound sample: 39 lines, both sides talk.
+    lines = ["Customer: To talk about that"] * 20 + ["PM: Two."] * 19
+    result = classify_call("inbound", 209155, lines)
+    assert result["customer_words"] > 0 and result["pm_words"] > 0
+    assert result["is_automated"] is False
+    assert result["skip_reason"] is None
+
+
+def test_classify_call_long_outbound_conversation():
+    # Shape of the audit's outbound sample: 93 lines, both sides talk.
+    lines = ["PM: Oh, don."] * 47 + ["Customer: No, C. Rockville."] * 46
+    result = classify_call("outbound", 461243, lines)
+    assert result["is_automated"] is False
+    assert result["skip_reason"] is None
+
+
+def test_classify_call_one_line_short_real_answer_is_still_analyzed():
+    # The audit's shortest call: 1 line, 2.8s, "Do Sunday work?" (3 words).
+    lines = ["Customer: Do Sunday work?"]
+    result = classify_call("outbound", 2875, lines)
+    assert result["customer_words"] == 3
+    assert result["is_automated"] is False
+    assert result["skip_reason"] is None  # word count alone never skips at >=3 words
+
+
+def test_classify_call_outbound_voicemail_greeting_is_automated():
+    lines = ["Customer: Hi, you've reached the mailbox, please leave a message after the tone."]
+    result = classify_call("outbound", 15000, lines)
+    assert result["is_automated"] is True
+
+
+def test_classify_call_inbound_voicemail_like_text_is_never_automated():
+    # A real customer leaving BCS a voicemail (inbound) that happens to
+    # mention a phrase from the list must never be marked automated.
+    lines = ["Customer: Sorry I missed your call, I was leaving a message for someone else earlier too."]
+    result = classify_call("inbound", 15000, lines)
+    assert result["is_automated"] is False
+
+
+def test_classify_call_pm_only_call_is_customer_silent_and_skipped():
+    lines = ["PM: Hello?", "PM: Anyone there?"]
+    result = classify_call("inbound", 5000, lines)
+    assert result["customer_words"] == 0
+    assert result["skip_reason"] == "no_customer_text"
+    assert result["is_automated"] is False  # no customer text to match a phrase against
+
+
+def test_classify_call_no_lines_at_all_is_no_customer_text():
+    result = classify_call("inbound", 1000, [])
+    assert result["skip_reason"] == "no_customer_text"
+
+
+def test_classify_call_fewer_than_3_customer_words_is_skipped():
+    lines = ["Customer: Hi there"]  # 2 words
+    result = classify_call("outbound", 3000, lines)
+    assert result["customer_words"] == 2
+    assert result["skip_reason"] == "no_customer_text"
+
+
+def test_classify_call_word_count_alone_never_sets_is_automated():
+    lines = ["Customer: Hi"]
+    result = classify_call("outbound", 1000, lines)
+    assert result["is_automated"] is False  # low word count -> skip_reason, not is_automated
+
+
+def test_classify_call_voicemail_phrase_press_1():
+    lines = ["Customer: For billing questions press 1, for everything else stay on the line."]
+    result = classify_call("outbound", 8000, lines)
+    assert result["is_automated"] is True

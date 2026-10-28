@@ -198,6 +198,63 @@ def normalize_dialpad_transcript(call: dict, transcript: dict) -> "dict[str, Any
     }
 
 
+# --- Call classification (Stage 10a, from the call audit) ------------------
+
+# Only ever applied to the CUSTOMER's side of an OUTBOUND call — an
+# inbound voicemail left by a real customer is real customer content and
+# must never be marked automated by this rule.
+VOICEMAIL_PHRASES = [
+    "leave a message", "voicemail", "not available", "after the tone",
+    "beep", "can't take your call", "press 1", "mailbox", "please record",
+]
+
+CALL_CUSTOMER_PREFIX = "Customer: "
+CALL_PM_PREFIX = "PM: "
+
+MIN_CUSTOMER_WORDS_FOR_ANALYSIS = 3
+SKIP_REASON_NO_CUSTOMER_TEXT = "no_customer_text"
+
+
+def classify_call(direction: str, duration_ms: "int | None", lines: list[str]) -> dict:
+    """lines: the formatted "Customer: ..."/"PM: ..." body_text lines
+    (e.g. body_text.splitlines()), not the raw transcript line dicts.
+
+    Returns {"customer_words", "pm_words", "is_automated", "skip_reason"}.
+    Word count alone never sets is_automated — only a voicemail/greeting
+    phrase match on an OUTBOUND call's customer text does. skip_reason is
+    "no_customer_text" when there are no Customer: lines at all (which
+    also covers a call with no Customer:/PM: lines whatsoever) or fewer
+    than MIN_CUSTOMER_WORDS_FOR_ANALYSIS customer words — a short REAL
+    answer at or above that threshold (e.g. "Do Sunday work?", 3 words)
+    is never skipped by word count.
+    """
+    customer_texts, pm_texts = [], []
+    for line in lines:
+        if line.startswith(CALL_CUSTOMER_PREFIX):
+            customer_texts.append(line[len(CALL_CUSTOMER_PREFIX):])
+        elif line.startswith(CALL_PM_PREFIX):
+            pm_texts.append(line[len(CALL_PM_PREFIX):])
+
+    customer_words = sum(len(t.split()) for t in customer_texts)
+    pm_words = sum(len(t.split()) for t in pm_texts)
+
+    is_automated = False
+    if direction == "outbound" and customer_texts:
+        joined = " ".join(customer_texts).lower()
+        is_automated = any(phrase in joined for phrase in VOICEMAIL_PHRASES)
+
+    skip_reason = (
+        SKIP_REASON_NO_CUSTOMER_TEXT
+        if not customer_texts or customer_words < MIN_CUSTOMER_WORDS_FOR_ANALYSIS
+        else None
+    )
+
+    return {
+        "customer_words": customer_words, "pm_words": pm_words,
+        "is_automated": is_automated, "skip_reason": skip_reason,
+    }
+
+
 # --- Gmail message -> customer_messages row --------------------------------
 
 def _header_map(headers: list) -> dict:

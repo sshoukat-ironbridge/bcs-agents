@@ -56,8 +56,27 @@ def test_outbound_email_different_thread_does_not_count():
 def test_connected_outbound_call_counts_as_responded():
     inbound = _inbound()
     call = {"source": "dialpad_call", "direction": "outbound", "customer_phone": "+15551234567",
-            "occurred_at": T0 + timedelta(hours=2), "duration_ms": 45000}
+            "occurred_at": T0 + timedelta(hours=2), "duration_ms": 45000,
+            "is_automated": False, "customer_words": 12}
     assert classify_response(inbound, [call], T0 + timedelta(hours=3)) == "responded"
+
+
+def test_voicemail_only_call_does_not_count_as_responded():
+    # Stage 10a: connected (duration > 0) but is_automated — the PM only
+    # reached the customer's voicemail, nobody actually talked.
+    inbound = _inbound()
+    call = {"source": "dialpad_call", "direction": "outbound", "customer_phone": "+15551234567",
+            "occurred_at": T0 + timedelta(hours=2), "duration_ms": 45000,
+            "is_automated": True, "customer_words": 20}
+    assert classify_response(inbound, [call], T0 + timedelta(hours=25)) == "overdue"
+
+
+def test_near_silent_call_does_not_count_as_responded():
+    inbound = _inbound()
+    call = {"source": "dialpad_call", "direction": "outbound", "customer_phone": "+15551234567",
+            "occurred_at": T0 + timedelta(hours=2), "duration_ms": 45000,
+            "is_automated": False, "customer_words": 1}
+    assert classify_response(inbound, [call], T0 + timedelta(hours=25)) == "overdue"
 
 
 def test_missed_call_zero_duration_does_not_count():

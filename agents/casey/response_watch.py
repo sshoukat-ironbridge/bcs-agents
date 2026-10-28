@@ -30,10 +30,16 @@ def _is_valid_response(inbound: dict, candidate: dict, sms_counts_as_response: b
         return candidate.get("thread_id") == inbound.get("thread_id") and bool(inbound.get("thread_id"))
 
     if source == "dialpad_call":
+        # Stage 10a: a connected outbound call only counts as an actual
+        # response when it was a real conversation — a voicemail-only
+        # call (is_automated) or one with fewer than 3 customer words
+        # must never close a watch just because duration_ms > 0.
         return (
             candidate.get("customer_phone") == inbound.get("customer_phone")
             and bool(inbound.get("customer_phone"))
             and (candidate.get("duration_ms") or 0) > 0
+            and not candidate.get("is_automated")
+            and (candidate.get("customer_words") or 0) >= 3
         )
 
     if source == "dialpad_sms":
