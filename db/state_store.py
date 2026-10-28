@@ -1602,6 +1602,20 @@ def get_ingest_cursor(source: str) -> "str | None":
         return None
 
 
+def get_all_ingest_cursors() -> list[dict]:
+    """Every ingest_cursors row — "data as of" per source/mailbox for a
+    report, read only, never writes."""
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            rows = s.query(IngestCursor).all()
+            return [{"source": r.source, "cursor_value": r.cursor_value, "updated_at": r.updated_at} for r in rows]
+    except Exception as e:
+        logger.error(f"get_all_ingest_cursors: {e}")
+        return []
+
+
 def set_ingest_cursor(source: str, cursor_value: str) -> None:
     if not _db_available:
         return
