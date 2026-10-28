@@ -56,6 +56,26 @@ def test_no_open_flag_creates_a_new_one():
     mock_notify.assert_called()  # suppressed (backfill, casey_live_since unset) but still stored
 
 
+def test_flag_keeps_its_real_first_detected_date():
+    # Stage 10a backfill: created_at must be the triggering message's
+    # occurred_at, not whenever process_flags happened to run.
+    flag_row = {"id": 42, "pm_name": "PM One", "severity": "Medium", "job_key": "A|to_start|Deck",
+                "customer_name": "c", "primary_reason": "Schedule delay / missed dates"}
+    patches = _patches(flag_by_id=flag_row)
+    with patch("db.state_store.create_flag_row", return_value=42) as mock_create, \
+         patch("db.state_store.create_flag_event") as mock_event, \
+         patch("db.state_store.create_notification"):
+        for p in patches:
+            p.start()
+        try:
+            process_one(_analysis(occurred_at="2026-08-01T00:00:00+00:00"), dry_run=False)
+        finally:
+            for p in patches:
+                p.stop()
+    assert mock_create.call_args[0][0]["created_at"] == "2026-08-01T00:00:00+00:00"
+    assert mock_event.call_args[0][0]["created_at"] == "2026-08-01T00:00:00+00:00"
+
+
 def test_same_complaint_higher_severity_escalates():
     existing = [{"id": 5, "job_key": "A|to_start|Deck", "primary_reason": "Schedule delay / missed dates", "severity": "Low"}]
     patches = _patches(existing_open_flags=existing, flag_by_id={"id": 5, "pm_name": "PM One", "severity": "Medium",
@@ -73,7 +93,8 @@ def test_same_complaint_higher_severity_escalates():
                 p.stop()
     assert result["action"] == "escalate"
     assert result["flag_id"] == 5
-    mock_update.assert_called_once_with(5, severity="Medium", latest_message_id=100)
+    mock_update.assert_called_once_with(5, severity="Medium", latest_message_id=100,
+                                         updated_at=_analysis()["occurred_at"])
     assert mock_event.call_args[0][0]["event_type"] == "severity_escalated"
     assert mock_event.call_args[0][0]["old_value"] == "Low"
     assert mock_event.call_args[0][0]["new_value"] == "Medium"

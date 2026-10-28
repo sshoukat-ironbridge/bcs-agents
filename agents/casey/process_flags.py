@@ -80,12 +80,14 @@ def process_one(analysis: dict, dry_run: bool = False) -> dict[str, Any]:
 
     result = {"action": action, "flag_id": None, "notifications_planned": 0}
 
+    event_time = analysis.get("occurred_at")  # real first-detected/event date, for a backfill running long after the fact
+
     if action == "no_op":
         if not dry_run:
             create_flag_event({
                 "flag_id": matched_flag["id"] if matched_flag else None,
                 "event_type": "note", "old_value": None, "new_value": "no_op",
-                "actor": "casey", "message_id": message_id,
+                "actor": "casey", "message_id": message_id, "created_at": event_time,
             })
         return result
 
@@ -95,7 +97,7 @@ def process_one(analysis: dict, dry_run: bool = False) -> dict[str, Any]:
             create_flag_event({
                 "flag_id": matched_flag["id"], "event_type": "improving_sentiment",
                 "old_value": None, "new_value": analysis.get("sentiment"),
-                "actor": "casey", "message_id": message_id,
+                "actor": "casey", "message_id": message_id, "created_at": event_time,
             })
         return result
 
@@ -103,11 +105,14 @@ def process_one(analysis: dict, dry_run: bool = False) -> dict[str, Any]:
         result["flag_id"] = matched_flag["id"] if matched_flag else None
         if not dry_run and matched_flag:
             old_severity = matched_flag["severity"]
-            update_flag_row(matched_flag["id"], severity=candidate["severity"], latest_message_id=message_id)
+            update_kwargs = {"severity": candidate["severity"], "latest_message_id": message_id}
+            if event_time is not None:
+                update_kwargs["updated_at"] = event_time
+            update_flag_row(matched_flag["id"], **update_kwargs)
             create_flag_event({
                 "flag_id": matched_flag["id"], "event_type": "severity_escalated",
                 "old_value": old_severity, "new_value": candidate["severity"],
-                "actor": "casey", "message_id": message_id,
+                "actor": "casey", "message_id": message_id, "created_at": event_time,
             })
             flag_row = get_flag_by_id(matched_flag["id"])
             result["notifications_planned"] = _plan_and_store_notifications(
@@ -126,12 +131,14 @@ def process_one(analysis: dict, dry_run: bool = False) -> dict[str, Any]:
                 "root_cause": analysis.get("root_cause") or "Undetermined (default)",
                 "reason_notes": analysis.get("reason_notes"), "issue_summary": analysis.get("issue_summary"),
                 "dedup_key": dedup_key, "first_message_id": message_id, "latest_message_id": message_id,
+                "created_at": event_time,
             })
             result["flag_id"] = flag_id
             if flag_id is not None:
                 create_flag_event({
                     "flag_id": flag_id, "event_type": "created", "old_value": None,
                     "new_value": candidate["severity"], "actor": "casey", "message_id": message_id,
+                    "created_at": event_time,
                 })
                 flag_row = get_flag_by_id(flag_id)
                 result["notifications_planned"] = _plan_and_store_notifications(

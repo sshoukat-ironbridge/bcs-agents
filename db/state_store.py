@@ -2245,6 +2245,14 @@ def create_flag_row(row: dict) -> "int | None":
                 dedup_key=row["dedup_key"], first_message_id=row.get("first_message_id"),
                 latest_message_id=row.get("latest_message_id"),
             )
+            # Stage 10a backfill: a flag's created_at is the date it was
+            # REALLY first detected (the triggering message's occurred_at),
+            # not whenever process_flags happened to run — otherwise every
+            # flag created by a backfill run would misleadingly show
+            # today's date no matter how old the underlying message is.
+            if row.get("created_at"):
+                flag.created_at = row["created_at"]
+                flag.updated_at = row["created_at"]
             s.add(flag)
             s.commit()
             return flag.id
@@ -2255,7 +2263,9 @@ def create_flag_row(row: dict) -> "int | None":
 
 def update_flag_row(flag_id: int, **fields) -> None:
     """Updates whichever columns are passed (e.g. severity=..., status=...,
-    latest_message_id=...). updated_at is always bumped."""
+    latest_message_id=...). updated_at is bumped to now UNLESS the
+    caller explicitly passes its own updated_at (Stage 10a backfill: the
+    real event date, not whenever process_flags happened to run)."""
     if not _db_available:
         return
     try:
@@ -2266,7 +2276,8 @@ def update_flag_row(flag_id: int, **fields) -> None:
             for key, value in fields.items():
                 if hasattr(row, key):
                     setattr(row, key, value)
-            row.updated_at = datetime.now(timezone.utc)
+            if "updated_at" not in fields:
+                row.updated_at = datetime.now(timezone.utc)
             s.commit()
     except Exception as e:
         logger.error(f"update_flag_row({flag_id}): {e}")
@@ -2282,6 +2293,8 @@ def create_flag_event(row: dict) -> "int | None":
                 old_value=row.get("old_value"), new_value=row.get("new_value"),
                 actor=row.get("actor", "casey"), message_id=row.get("message_id"),
             )
+            if row.get("created_at"):  # Stage 10a backfill: real event date, not "now"
+                event.created_at = row["created_at"]
             s.add(event)
             s.commit()
             return event.id
