@@ -11,31 +11,31 @@
 <!-- KPI cards -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Open Flags</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Flags not yet Resolved or marked No Action Taken.">Open Flags</div>
     <div class="text-3xl font-extrabold text-slate-800 tracking-tight">{{ kpis.open_flags }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Critical + High</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Open flags currently at Critical or High severity.">Critical + High</div>
     <div class="text-3xl font-extrabold text-red-600 tracking-tight">{{ kpis.critical_high_count }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Flagged Projects</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Distinct projects with at least one open flag.">Flagged Projects</div>
     <div class="text-3xl font-extrabold text-slate-800 tracking-tight">{{ kpis.flagged_projects }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Overdue Email Responses</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Customer emails with no PM reply within the response window.">Overdue Email Responses</div>
     <div class="text-3xl font-extrabold text-orange-600 tracking-tight">{{ kpis.overdue_responses }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Avg. Age (days)</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Average days since an open flag was created. Needs at least 5 open flags.">Avg. Age (days)</div>
     <div class="text-3xl font-extrabold text-slate-800 tracking-tight">{{ kpis.avg_age_days }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Avg. Days to Close</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Average days between a flag's creation and its closing. Needs at least 5 closed flags.">Avg. Days to Close</div>
     <div class="text-3xl font-extrabold text-slate-800 tracking-tight">{{ kpis.avg_days_to_close }}</div>
   </div>
   <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
-    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Praise This Month</div>
+    <div class="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1" title="Strong unsolicited praise messages this calendar month.">Praise This Month</div>
     <div class="text-3xl font-extrabold text-emerald-600 tracking-tight">{{ kpis.positive_praise_this_month }}</div>
   </div>
 </div>

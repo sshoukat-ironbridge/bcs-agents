@@ -27,6 +27,11 @@
     ::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.35); border-radius: 9999px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.55); }
     ::selection { background: rgba(79, 70, 229, 0.25); }
+    /* htmx loading state: the swapped-in region dims while its request is in flight */
+    .htmx-request { opacity: 0.5; transition: opacity 150ms ease; }
+    .htmx-indicator { display: none; }
+    .htmx-request.htmx-indicator, .htmx-request .htmx-indicator { display: inline-flex; }
+    [data-tooltip] { position: relative; cursor: help; }
   </style>
 </head>
 <body class="h-full bg-slate-50 flex overflow-hidden text-slate-800">
@@ -64,9 +69,10 @@
 
       <!-- Casey section -->
       <div>
+        {% set casey_pages = ['casey-overview','casey-flags','casey-people','casey-positive','casey-responses','casey-trends'] %}
         <button onclick="toggleSection('casey-sub')"
           class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150
-            {% if page in ['casey-overview','casey-flags'] %}text-white bg-slate-800/50{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
+            {% if page in casey_pages %}text-white bg-slate-800/50{% else %}text-slate-300 hover:bg-slate-800/70 hover:text-white{% endif %}">
           <span class="flex items-center gap-3">
             <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -74,22 +80,26 @@
             </svg>
             Casey
           </span>
-          <svg id="casey-sub-arrow" class="w-3.5 h-3.5 transition-transform duration-200 {% if page in ['casey-overview','casey-flags'] %}rotate-180{% endif %}"
+          <svg id="casey-sub-arrow" class="w-3.5 h-3.5 transition-transform duration-200 {% if page in casey_pages %}rotate-180{% endif %}"
             fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
           </svg>
         </button>
-        <div id="casey-sub" class="{% if page not in ['casey-overview','casey-flags'] %}hidden{% endif %} mt-1 space-y-0.5">
-          <a href="/casey"
+        <div id="casey-sub" class="{% if page not in casey_pages %}hidden{% endif %} mt-1 space-y-0.5">
+          {% for href, key, label in [
+            ('/casey', 'casey-overview', 'Overview'),
+            ('/casey/flags', 'casey-flags', 'Flag Tracker'),
+            ('/casey/people', 'casey-people', 'People'),
+            ('/casey/positive', 'casey-positive', 'Positive'),
+            ('/casey/responses', 'casey-responses', 'Responses'),
+            ('/casey/trends', 'casey-trends', 'Trends'),
+          ] %}
+          <a href="{{ href }}"
             class="flex items-center gap-3 pl-10 pr-3 py-2 rounded-xl text-sm transition-all duration-150 border-l-2
-              {% if page == 'casey-overview' %}border-indigo-500 bg-slate-800/60 text-white{% else %}border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-white{% endif %}">
-            Overview
+              {% if page == key %}border-indigo-500 bg-slate-800/60 text-white{% else %}border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-white{% endif %}">
+            {{ label }}
           </a>
-          <a href="/casey/flags"
-            class="flex items-center gap-3 pl-10 pr-3 py-2 rounded-xl text-sm transition-all duration-150 border-l-2
-              {% if page == 'casey-flags' %}border-indigo-500 bg-slate-800/60 text-white{% else %}border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-white{% endif %}">
-            Flag Tracker
-          </a>
+          {% endfor %}
         </div>
       </div>
 

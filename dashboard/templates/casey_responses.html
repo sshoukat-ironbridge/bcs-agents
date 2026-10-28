@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Casey — Responses — BCS Agents{% endblock %}
+{% block heading %}Casey — 24h Email Response Watch{% endblock %}
+
+{% block content %}
+
+{% include "_casey_demo_banner.html" %}
+
+<p class="text-sm text-slate-500 mb-4">Tracks customer emails awaiting a PM reply. Dialpad calls are never included here.</p>
+
+<div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 overflow-hidden mb-6">
+  <div class="px-5 py-4 border-b border-slate-100">
+    <h2 class="font-semibold text-slate-800 text-sm">Waiting &amp; Overdue</h2>
+    <p class="text-xs text-slate-500 mt-0.5">{{ rows|length }} open watches</p>
+  </div>
+  {% if rows %}
+  <div class="overflow-auto max-h-[60vh]">
+    <table class="w-full text-sm">
+      <thead class="sticky top-0 z-10">
+        <tr class="bg-slate-50 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <th class="px-4 py-3">Customer</th>
+          <th class="px-4 py-3">PM</th>
+          <th class="px-4 py-3">Received</th>
+          <th class="px-4 py-3">Status</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for row in rows %}
+        <tr class="hover:bg-slate-50/80 transition-colors duration-100">
+          <td class="px-4 py-3 font-medium text-slate-800">{{ row.customer_email }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.pm_name }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.received_str }}</td>
+          <td class="px-4 py-3">
+            <span class="watch-countdown font-semibold" data-due="{{ row.due_at_iso }}">—</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="flex flex-col items-center justify-center py-16 px-6 text-center">
+    <div class="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center text-2xl mb-4">✅</div>
+    <h3 class="font-semibold text-slate-700 mb-1">All caught up</h3>
+    <p class="text-sm text-slate-500 max-w-xs">No customer emails are currently waiting on a reply.</p>
+  </div>
+  {% endif %}
+</div>
+
+<div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+  <h3 class="text-sm font-semibold text-slate-700 mb-3" title="Share of this PM's responded watches that came in within the 24h window.">
+    Responded-within-24h Rate by PM
+  </h3>
+  {% if rate_by_pm %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="bg-slate-50 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <th class="px-4 py-3">PM</th>
+          <th class="px-4 py-3">Rate</th>
+          <th class="px-4 py-3">Responded Watches</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for row in rate_by_pm %}
+        <tr>
+          <td class="px-4 py-3 font-medium text-slate-800">{{ row.pm_name }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.rate if row.rate is string else row.rate ~ '%' }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.responded_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-slate-400 py-6 text-center">No responded watches yet.</p>
+  {% endif %}
+</div>
+
+<script>
+  function tickCountdowns() {
+    const now = Date.now();
+    document.querySelectorAll('.watch-countdown').forEach(el => {
+      const due = new Date(el.dataset.due).getTime();
+      const diffMs = due - now;
+      const hours = Math.floor(Math.abs(diffMs) / 3600000);
+      const mins = Math.floor((Math.abs(diffMs) % 3600000) / 60000);
+      if (diffMs >= 0) {
+        el.textContent = `Due in ${hours}h ${mins}m`;
+        el.className = 'watch-countdown font-semibold text-indigo-600';
+      } else {
+        el.textContent = `Overdue by ${hours}h ${mins}m`;
+        el.className = 'watch-countdown font-semibold text-red-600';
+      }
+    });
+  }
+  tickCountdowns();
+  setInterval(tickCountdowns, 30000);
+</script>
+
+{% endblock %}

@@ -233,3 +233,90 @@ async def casey_flag_update(
         s.commit()
 
     return RedirectResponse(f"/casey/flags/{flag_id}?saved=1", status_code=303)
+
+
+@router.get("/casey/people", response_class=HTMLResponse)
+async def casey_people(request: Request, type: str = "pm"):
+    import dashboard.casey_queries as q
+
+    person_type = type if type in ("pm", "estimator") else "pm"
+    viewer = _viewer(request)
+    rows = q.people_workload(viewer, person_type)
+    rows_sorted_for_chart = sorted(
+        [r for r in rows if isinstance(r["flags_per_10"], (int, float))],
+        key=lambda r: r["flags_per_10"], reverse=True,
+    )
+
+    ctx = {
+        "page": "casey-people",
+        **_demo_banner_context(),
+        "person_type": person_type,
+        "rows": rows,
+        "chart_rows": rows_sorted_for_chart,
+    }
+    return templates.TemplateResponse(request, "casey_people.html", ctx)
+
+
+@router.get("/casey/positive", response_class=HTMLResponse)
+async def casey_positive(request: Request):
+    import dashboard.casey_queries as q
+
+    viewer = _viewer(request)
+    praise = q.strong_praise_list(viewer, weeks=8)
+    for p in praise:
+        p["occurred_str"] = format_ny(p.get("occurred_at"))
+
+    ctx = {
+        "page": "casey-positive",
+        **_demo_banner_context(),
+        "praise": praise,
+        "weekly": q.praise_weekly_counts(viewer, weeks=8),
+        "by_pm": q.praise_by_pm(viewer),
+    }
+    return templates.TemplateResponse(request, "casey_positive.html", ctx)
+
+
+@router.get("/casey/responses", response_class=HTMLResponse)
+async def casey_responses(request: Request):
+    import dashboard.casey_queries as q
+
+    viewer = _viewer(request)
+    rows = q.response_watches_table(viewer)
+    for r in rows:
+        r["received_str"] = format_ny(r.get("received_at"))
+        r["due_at_iso"] = r["due_at"].isoformat() if r.get("due_at") else ""
+
+    ctx = {
+        "page": "casey-responses",
+        **_demo_banner_context(),
+        "rows": rows,
+        "rate_by_pm": q.response_rate_by_pm(viewer),
+    }
+    return templates.TemplateResponse(request, "casey_responses.html", ctx)
+
+
+@router.get("/casey/trends", response_class=HTMLResponse)
+async def casey_trends(request: Request, weeks: int = 8, pm: str = ""):
+    import dashboard.casey_queries as q
+
+    weeks = weeks if weeks in (4, 8, 12) else 8
+    viewer = _viewer(request)
+
+    weekly = q.flags_opened_closed_by_week(viewer, weeks=weeks)
+    category_weekly = q.flags_by_category_weekly(viewer, weeks=weeks)
+    sentiment_traj = q.sentiment_trajectory_by_pm(viewer, weeks=weeks, pm=pm or None)
+    worsening = q.worsening_projects(viewer, weeks=weeks)
+
+    ctx = {
+        "page": "casey-trends",
+        **_demo_banner_context(),
+        "weeks": weeks,
+        "pm_filter": pm,
+        "pm_options": sorted({row["name"] for row in q.people_workload(viewer, "pm")}),
+        "weekly": weekly,
+        "category_weekly": category_weekly,
+        "sentiment_traj": sentiment_traj,
+        "worsening": worsening,
+        "severities": SEVERITIES,
+    }
+    return templates.TemplateResponse(request, "casey_trends.html", ctx)

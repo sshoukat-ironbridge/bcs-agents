@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Casey — People — BCS Agents{% endblock %}
+{% block heading %}Casey — People{% endblock %}
+
+{% block content %}
+
+{% include "_casey_demo_banner.html" %}
+
+<div class="flex gap-1 mb-4 bg-slate-100 rounded-xl p-1 w-fit">
+  <a href="/casey/people?type=pm"
+    class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors duration-150 {% if person_type == 'pm' %}bg-white text-slate-800 shadow-sm{% else %}text-slate-500 hover:text-slate-700{% endif %}">
+    Project Managers
+  </a>
+  <a href="/casey/people?type=estimator"
+    class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors duration-150 {% if person_type == 'estimator' %}bg-white text-slate-800 shadow-sm{% else %}text-slate-500 hover:text-slate-700{% endif %}">
+    Estimators
+  </a>
+</div>
+
+<div class="mb-4 px-4 py-2.5 bg-indigo-50 ring-1 ring-indigo-100 rounded-xl text-sm text-indigo-700">
+  {% if person_type == 'pm' %}
+  <strong>Current workload</strong> — PM figures reflect who is assigned to each project and flag right now.
+  {% else %}
+  <strong>Historical attribution</strong> — estimator figures reflect who estimated the project; they do not reflect current workload.
+  {% endif %}
+</div>
+
+<div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5 mb-6">
+  <h3 class="text-sm font-semibold text-slate-700 mb-3" title="Total flags per 10 active projects — higher means more flags relative to that person's workload.">
+    Flags per 10 Projects
+  </h3>
+  {% if chart_rows %}
+  <div class="h-64"><canvas id="chart-flags-per-10"></canvas></div>
+  {% else %}
+  <p class="text-sm text-slate-400 py-8 text-center">Not enough data yet (need 5+ projects per person).</p>
+  {% endif %}
+</div>
+
+<div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 overflow-hidden">
+  <div class="px-5 py-4 border-b border-slate-100">
+    <h2 class="font-semibold text-slate-800 text-sm">{{ 'Project Managers' if person_type == 'pm' else 'Estimators' }}</h2>
+    <p class="text-xs text-slate-500 mt-0.5">{{ rows|length }} people</p>
+  </div>
+  {% if rows %}
+  <div class="overflow-auto max-h-[65vh]">
+    <table class="w-full text-sm">
+      <thead class="sticky top-0 z-10">
+        <tr class="bg-slate-50 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <th class="px-4 py-3">Name</th>
+          <th class="px-4 py-3" title="Non-retired projects currently assigned to this person.">Active Projects</th>
+          <th class="px-4 py-3">To Start</th>
+          <th class="px-4 py-3">In Process</th>
+          <th class="px-4 py-3">Open Flags</th>
+          <th class="px-4 py-3">Total Flags</th>
+          <th class="px-4 py-3">Flagged Projects</th>
+          <th class="px-4 py-3" title="Flagged projects ÷ active projects. n/a under 5 active projects.">Flagged Share</th>
+          <th class="px-4 py-3" title="Total flags ÷ active projects × 10. n/a under 5 active projects.">Flags / 10 Projects</th>
+          <th class="px-4 py-3">Avg. Sentiment</th>
+          <th class="px-4 py-3">Strong Praise</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for row in rows %}
+        <tr class="hover:bg-slate-50/80 transition-colors duration-100">
+          <td class="px-4 py-3 font-medium text-slate-800">{{ row.name }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.active_total }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.active_to_start }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.active_in_process }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.open_flags }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.total_flags }}</td>
+          <td class="px-4 py-3 text-slate-600">{{ row.flagged_projects }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.flagged_share if row.flagged_share is string else row.flagged_share ~ '%' }}</td>
+          <td class="px-4 py-3 text-slate-500">{{ row.flags_per_10 }}</td>
+          <td class="px-4 py-3">
+            {% if row.avg_sentiment is not none %}
+            <span class="{% if row.avg_sentiment > 0.1 %}text-emerald-600{% elif row.avg_sentiment < -0.1 %}text-red-600{% else %}text-slate-500{% endif %} font-medium">{{ row.avg_sentiment }}</span>
+            {% else %}<span class="text-slate-400">—</span>{% endif %}
+          </td>
+          <td class="px-4 py-3 text-emerald-600 font-medium">{{ row.strong_praise_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="flex flex-col items-center justify-center py-20 px-6 text-center">
+    <div class="w-14 h-14 bg-slate-100 rounded-2xl flex items-center justify-center text-2xl mb-4">👥</div>
+    <h3 class="font-semibold text-slate-700 mb-1">No data yet</h3>
+    <p class="text-sm text-slate-500 max-w-xs">No active projects or flags to show here.</p>
+  </div>
+  {% endif %}
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+  const chartRows = {{ chart_rows | tojson }};
+  if (chartRows.length) {
+    Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, sans-serif';
+    Chart.defaults.color = '#64748b';
+    new Chart(document.getElementById('chart-flags-per-10'), {
+      type: 'bar',
+      data: {
+        labels: chartRows.map(r => r.name),
+        datasets: [{ data: chartRows.map(r => r.flags_per_10), backgroundColor: '#6366f1' }],
+      },
+      options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } },
+    });
+  }
+</script>
+
+{% endblock %}
