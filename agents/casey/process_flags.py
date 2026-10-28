@@ -29,7 +29,17 @@ def _dedup_key(job_key: "str | None", primary_reason: "str | None") -> str:
     return f"{job_key}:{primary_reason}"
 
 
-def _plan_and_store_notifications(flag: dict, action: str, event_time, dry_run: bool) -> int:
+def _flag_link(flag: dict) -> str:
+    from db.state_store import get_config
+
+    base_url = (get_config("casey_dashboard_base_url") or "").rstrip("/")
+    if not base_url or flag.get("id") is None:
+        return ""
+    return f"{base_url}/casey/flags/{flag['id']}"
+
+
+def _plan_and_store_notifications(flag: dict, action: str, event_time, dry_run: bool,
+                                   old_severity: "str | None" = None) -> int:
     from db.state_store import get_config, find_pm, create_notification
     from agents.casey.notification_plan import plan_notifications, apply_backfill_suppression, RECIPIENT_CONFIG_KEYS
     from agents.casey.ingest_windows import parse_cursor
@@ -39,7 +49,9 @@ def _plan_and_store_notifications(flag: dict, action: str, event_time, dry_run: 
     pm = find_pm(flag.get("pm_name") or "") if flag.get("pm_name") else None
     pm_email = (pm or {}).get("email", "")
 
-    rows = plan_notifications(flag, action, recipient_addresses=recipient_addresses, pm_email=pm_email)
+    flag_with_link = {**flag, "link": _flag_link(flag)}
+    rows = plan_notifications(flag_with_link, action, recipient_addresses=recipient_addresses,
+                               pm_email=pm_email, old_severity=old_severity)
     live_since = parse_cursor(get_config("casey_live_since"))
     rows = apply_backfill_suppression(rows, event_time, live_since)
 
@@ -99,7 +111,7 @@ def process_one(analysis: dict, dry_run: bool = False) -> dict[str, Any]:
             })
             flag_row = get_flag_by_id(matched_flag["id"])
             result["notifications_planned"] = _plan_and_store_notifications(
-                flag_row, action, analysis.get("occurred_at"), dry_run
+                flag_row, action, analysis.get("occurred_at"), dry_run, old_severity=old_severity
             )
         return result
 

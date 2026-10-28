@@ -172,6 +172,42 @@ def test_notifications_suppressed_when_live_since_unset():
         assert row["reason"] == "backfill"
 
 
+def test_escalation_notification_says_so_explicitly():
+    existing = [{"id": 5, "job_key": "A|to_start|Deck", "primary_reason": "Schedule delay / missed dates", "severity": "Low"}]
+    patches = _patches(existing_open_flags=existing, flag_by_id={"id": 5, "pm_name": "PM One", "severity": "Medium",
+                                                                  "job_key": "A|to_start|Deck", "customer_name": "c",
+                                                                  "primary_reason": "Schedule delay / missed dates"})
+    with patch("db.state_store.update_flag_row"), \
+         patch("db.state_store.create_flag_event"), \
+         patch("db.state_store.create_notification") as mock_notify:
+        for p in patches:
+            p.start()
+        try:
+            process_one(_analysis(severity="Medium"), dry_run=False)
+        finally:
+            for p in patches:
+                p.stop()
+    for call in mock_notify.call_args_list:
+        assert "ESCALATED to MEDIUM from LOW" in call.args[0]["message"]
+
+
+def test_notification_includes_dashboard_link_when_configured():
+    flag_row = {"id": 42, "pm_name": "PM One", "severity": "Medium", "job_key": "A|to_start|Deck",
+                "customer_name": "c", "primary_reason": "Schedule delay / missed dates"}
+    patches = _patches(config_overrides={"casey_dashboard_base_url": "https://dash.example"}, flag_by_id=flag_row)
+    with patch("db.state_store.create_flag_row", return_value=42), \
+         patch("db.state_store.create_flag_event"), \
+         patch("db.state_store.create_notification") as mock_notify:
+        for p in patches:
+            p.start()
+        try:
+            process_one(_analysis(), dry_run=False)
+        finally:
+            for p in patches:
+                p.stop()
+    assert any("https://dash.example/casey/flags/42" in call.args[0]["message"] for call in mock_notify.call_args_list)
+
+
 def test_run_tallies_across_multiple_analyses():
     analyses = [_analysis(message_id=1, job_key="A|to_start|Deck"), _analysis(message_id=2, job_key="B|to_start|Fence")]
     with patch("db.state_store.get_unprocessed_analyses", return_value=analyses), \

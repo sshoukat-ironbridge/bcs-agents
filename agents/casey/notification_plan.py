@@ -43,16 +43,17 @@ def _severity_label(severity: str) -> str:
     return (severity or "").upper()
 
 
-def build_message(flag: dict) -> str:
-    """Severity label first, then customer/project, PM, category, a short
-    summary, and a link to the flag record (if given)."""
+def build_message(flag: dict, action: str = "create", old_severity: "str | None" = None) -> str:
+    """Severity label first, then (for an escalation) an explicit
+    "ESCALATED to X from Y" line, then customer/project, PM, category, a
+    short summary, and a link to the flag record (if given)."""
     severity = flag.get("severity", "")
-    lines = [
-        f"{_severity_label(severity)}: {flag.get('customer_name', '')}".strip(),
-        f"Project: {flag.get('address') or flag.get('job_key', '')}",
-        f"PM: {flag.get('pm_name') or 'Unassigned'}",
-        f"Category: {flag.get('primary_reason', '')}",
-    ]
+    lines = [f"{_severity_label(severity)}: {flag.get('customer_name', '')}".strip()]
+    if action == "escalate" and old_severity:
+        lines.append(f"ESCALATED to {_severity_label(severity)} from {_severity_label(old_severity)}")
+    lines.append(f"Project: {flag.get('address') or flag.get('job_key', '')}")
+    lines.append(f"PM: {flag.get('pm_name') or 'Unassigned'}")
+    lines.append(f"Category: {flag.get('primary_reason', '')}")
     if flag.get("issue_summary"):
         lines.append(flag["issue_summary"])
     if flag.get("link"):
@@ -67,6 +68,7 @@ def plan_notifications(
     recipient_addresses: "dict[str, str] | None" = None,
     email_matrix: "dict[str, list[str]] | None" = None,
     pm_email: str = "",
+    old_severity: "str | None" = None,
 ) -> list[dict[str, Any]]:
     """Returns the rows to create for this flag/action: a Slack channel
     post and a Slack DM to the PM for every plannable action, plus one
@@ -102,7 +104,7 @@ def plan_notifications(
     severity = flag.get("severity", "")
     flag_id = flag.get("id")
     dedup_key = f"{flag_id}:{severity}"
-    message = build_message(flag)
+    message = build_message(flag, action, old_severity)
     override = recipient_addresses.get("override", "")
 
     def _row(channel: str, recipient: str) -> dict[str, Any]:

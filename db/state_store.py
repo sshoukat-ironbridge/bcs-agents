@@ -259,8 +259,15 @@ if _db_available:
         recipient  = Column(String, nullable=False)
         severity   = Column(String, nullable=True)
         dedup_key  = Column(String, nullable=False)
-        status     = Column(String, nullable=False, default="planned")  # planned | sent | suppressed | failed
+        status     = Column(String, nullable=False, default="planned")  # planned | sending | sent | suppressed | failed
         reason     = Column(String, nullable=True)  # e.g. "backfill" when status == "suppressed"
+        # The exact message text built at planning time (agents/casey/
+        # notification_plan.py's build_message()) — persisted rather than
+        # rebuilt at send time, so an escalation's "ESCALATED to X from Y"
+        # wording and the flag's severity/link snapshot at the moment this
+        # row was planned never drift from what was actually decided.
+        message    = Column(Text, nullable=True)
+        attempts   = Column(Integer, nullable=False, default=0)
         planned_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
         sent_at    = Column(DateTime(timezone=True), nullable=True)
         error      = Column(Text, nullable=True)
@@ -538,6 +545,14 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE casey_flag_events ALTER COLUMN flag_id DROP NOT NULL"))
             conn.commit()
 
+            # Stage 8: persist the exact message text and send-attempt count.
+            conn.execute(text("ALTER TABLE casey_notifications ADD COLUMN IF NOT EXISTS message TEXT"))
+            conn.execute(text("ALTER TABLE casey_notifications ADD COLUMN IF NOT EXISTS attempts INTEGER"))
+            conn.execute(text("UPDATE casey_notifications SET attempts = 0 WHERE attempts IS NULL"))
+            conn.execute(text("ALTER TABLE casey_notifications ALTER COLUMN attempts SET DEFAULT 0"))
+            conn.execute(text("ALTER TABLE casey_notifications ALTER COLUMN attempts SET NOT NULL"))
+            conn.commit()
+
             # One-time migration: retire Patricia Anderson (manually removed from sheet)
             if not conn.execute(
                 text("SELECT value FROM app_config WHERE key = 'patricia_anderson_retired'")
@@ -626,6 +641,24 @@ def init_db() -> None:
                 "casey_max_tokens": "1024",
                 # How much message history to feed the model per analysis.
                 "casey_history_messages": "10",
+                # Notification sender (Stage 8, agents/casey/notify.py). Off
+                # by default — a scheduled run checks this; an explicit CLI
+                # invocation of notify.py always runs regardless.
+                "casey_notify_enabled": "false",
+                # Base URL used to build a flag's dashboard link
+                # (<base>/casey/flags/<id>). Empty by default — no link is
+                # included until this is set.
+                "casey_dashboard_base_url": "",
+                # Max retries for a failed notification send — a failed
+                # row goes back to "planned" and is retried on the next
+                # scheduled agents/casey/main.py run (the run interval
+                # itself is the backoff) until this many attempts.
+                "casey_notify_max_retries": "3",
+                # Local-safe send test channel (agents/casey/notify.py,
+                # scripts/casey_send_test.py). Real Slack channel/DM
+                # recipients are only used when CASEY_ENV=production;
+                # otherwise every Slack send goes to this test channel.
+                "casey_slack_test_channel": "",
             }
             for key, default_val in _config_defaults.items():
                 existing = conn.execute(
@@ -1709,6 +1742,7 @@ def create_notification(row: dict) -> "int | None":
                 dedup_key=row["dedup_key"],
                 status=row.get("status", "planned"),
                 reason=row.get("reason"),
+                message=row.get("message"),
             )
             s.add(notification)
             s.commit()
@@ -1727,6 +1761,96 @@ def notification_exists(dedup_key: str) -> bool:
     except Exception as e:
         logger.error(f"notification_exists({dedup_key}): {e}")
         return False
+
+
+# --- Sending (agents/casey/notify.py) ---------------------------------------
+
+def _notification_to_dict(r) -> dict:
+    return {
+        "id": r.id, "flag_id": r.flag_id, "watch_id": r.watch_id, "channel": r.channel,
+        "recipient": r.recipient, "severity": r.severity, "dedup_key": r.dedup_key,
+        "status": r.status, "reason": r.reason, "message": r.message, "attempts": r.attempts,
+    }
+
+
+def get_planned_notifications(limit: int = 50) -> list[dict]:
+    if not _db_available:
+        return []
+    try:
+        with _Session() as s:
+            rows = (
+                s.query(CaseyNotification)
+                .filter(CaseyNotification.status == "planned")
+                .order_by(CaseyNotification.planned_at.asc())
+                .limit(limit)
+                .all()
+            )
+            return [_notification_to_dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"get_planned_notifications: {e}")
+        return []
+
+
+def claim_notification_for_sending(notification_id: int) -> "dict | None":
+    """Atomically moves one row from "planned" to "sending" and returns
+    it, or None if it was already claimed (by this or another process) —
+    the UPDATE's WHERE clause only matches a still-"planned" row, so two
+    concurrent callers racing on the same id can never both succeed."""
+    if not _db_available:
+        return None
+    try:
+        with _Session() as s:
+            result = s.execute(
+                text("""
+                    UPDATE casey_notifications SET status = 'sending'
+                    WHERE id = :id AND status = 'planned'
+                    RETURNING id, flag_id, watch_id, channel, recipient, severity,
+                              dedup_key, status, reason, message, attempts
+                """),
+                {"id": notification_id},
+            ).fetchone()
+            s.commit()
+            return dict(result._mapping) if result else None
+    except Exception as e:
+        logger.error(f"claim_notification_for_sending({notification_id}): {e}")
+        return None
+
+
+def mark_notification_sent(notification_id: int) -> None:
+    if not _db_available:
+        return
+    try:
+        with _Session() as s:
+            row = s.query(CaseyNotification).filter_by(id=notification_id).first()
+            if not row:
+                return
+            row.status = "sent"
+            row.sent_at = datetime.now(timezone.utc)
+            row.error = None
+            s.commit()
+    except Exception as e:
+        logger.error(f"mark_notification_sent({notification_id}): {e}")
+
+
+def mark_notification_failed(notification_id: int, error: str, max_retries: int = 3) -> str:
+    """Increments attempts; returns the row to "planned" (for the next
+    run to retry) while attempts stays under max_retries, otherwise
+    marks it "failed" permanently. Returns the resulting status."""
+    if not _db_available:
+        return "failed"
+    try:
+        with _Session() as s:
+            row = s.query(CaseyNotification).filter_by(id=notification_id).first()
+            if not row:
+                return "failed"
+            row.attempts = (row.attempts or 0) + 1
+            row.error = error
+            row.status = "planned" if row.attempts < max_retries else "failed"
+            s.commit()
+            return row.status
+    except Exception as e:
+        logger.error(f"mark_notification_failed({notification_id}): {e}")
+        return "failed"
 
 
 # --- Analysis engine (agents/casey/analyze.py) ------------------------------

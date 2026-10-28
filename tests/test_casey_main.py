@@ -4,7 +4,8 @@ from agents.casey.main import run_stages, _format_summary, ALL_STAGES
 
 
 def _config(overrides=None):
-    values = {"casey_dialpad_enabled": "false", "casey_gmail_enabled": "false", "casey_analysis_enabled": "false"}
+    values = {"casey_dialpad_enabled": "false", "casey_gmail_enabled": "false",
+              "casey_analysis_enabled": "false", "casey_notify_enabled": "false"}
     values.update(overrides or {})
     return lambda key: values.get(key, "")
 
@@ -17,25 +18,35 @@ def test_disabled_stages_are_skipped():
     assert results["ingest_dialpad"] == {"ok": True, "skipped": True}
     assert results["ingest_gmail"] == {"ok": True, "skipped": True}
     assert results["analyze"] == {"ok": True, "skipped": True}
+    assert results["notify"] == {"ok": True, "skipped": True}
     assert results["process_flags"]["ok"] is True
     assert results["run_watches"]["ok"] is True
 
 
 def test_enabled_stages_actually_run():
     with patch("db.state_store.get_config", side_effect=_config({
-            "casey_dialpad_enabled": "true", "casey_gmail_enabled": "true", "casey_analysis_enabled": "true"})), \
+            "casey_dialpad_enabled": "true", "casey_gmail_enabled": "true",
+            "casey_analysis_enabled": "true", "casey_notify_enabled": "true"})), \
          patch("agents.casey.ingest_dialpad.run", return_value={"calls_seen": 5}) as mock_dialpad, \
          patch("agents.casey.ingest_gmail.run", return_value={"stored": 1}) as mock_gmail, \
          patch("agents.casey.analyze.run", return_value={"analyzed": 2}) as mock_analyze, \
          patch("agents.casey.process_flags.run", return_value={"processed": 0}), \
-         patch("agents.casey.run_watches.run", return_value={"created": 0}):
+         patch("agents.casey.run_watches.run", return_value={"created": 0}), \
+         patch("agents.casey.notify.run", return_value={"sent": 1}) as mock_notify:
         results = run_stages(dry_run=False)
     mock_dialpad.assert_called_once()
     mock_gmail.assert_called_once()
     mock_analyze.assert_called_once()
+    mock_notify.assert_called_once()
     assert results["ingest_dialpad"]["stats"] == {"calls_seen": 5}
     assert results["ingest_gmail"]["stats"] == {"stored": 1}
     assert results["analyze"]["stats"] == {"analyzed": 2}
+    assert results["notify"]["stats"] == {"sent": 1}
+
+
+def test_notify_runs_after_process_flags_and_run_watches_in_stage_order():
+    assert ALL_STAGES.index("notify") > ALL_STAGES.index("process_flags")
+    assert ALL_STAGES.index("notify") > ALL_STAGES.index("run_watches")
 
 
 def test_one_stage_failure_does_not_block_the_rest():
@@ -66,7 +77,7 @@ def test_unknown_stage_name_is_skipped_with_a_warning():
 
 
 def test_all_stages_constant_matches_spec_order():
-    assert ALL_STAGES == ["ingest_dialpad", "ingest_gmail", "analyze", "process_flags", "run_watches"]
+    assert ALL_STAGES == ["ingest_dialpad", "ingest_gmail", "analyze", "process_flags", "run_watches", "notify"]
 
 
 def test_format_summary_includes_every_stage():

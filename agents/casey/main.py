@@ -21,7 +21,7 @@ logger = get_logger("casey")
 STAGE_INGEST_WINDOW = "1d"
 ANALYZE_LIMIT_PER_RUN = 10
 
-ALL_STAGES = ["ingest_dialpad", "ingest_gmail", "analyze", "process_flags", "run_watches"]
+ALL_STAGES = ["ingest_dialpad", "ingest_gmail", "analyze", "process_flags", "run_watches", "notify"]
 
 
 def _stage_enabled(stage: str) -> bool:
@@ -36,6 +36,8 @@ def _stage_enabled(stage: str) -> bool:
         return (get_config("casey_gmail_enabled") or "false").strip().lower() == "true"
     if stage == "analyze":
         return (get_config("casey_analysis_enabled") or "false").strip().lower() == "true"
+    if stage == "notify":
+        return (get_config("casey_notify_enabled") or "false").strip().lower() == "true"
     return True  # process_flags, run_watches: no on/off switch, always run
 
 
@@ -60,6 +62,11 @@ def _run_stage(stage: str, dry_run: bool) -> dict:
         elif stage == "run_watches":
             from agents.casey.run_watches import run as run_watches_run
             stats = run_watches_run(dry_run=dry_run)
+        elif stage == "notify":
+            # --dry-run is a print only here: notify.run()'s own dry_run
+            # path makes no send and no DB write (just counts planned rows).
+            from agents.casey.notify import run as notify_run
+            stats = notify_run(dry_run=dry_run)
         else:
             return {"ok": False, "error": f"unknown stage {stage!r}"}
     except Exception as e:

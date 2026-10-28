@@ -115,6 +115,24 @@ def test_message_starts_with_severity_label():
     assert FLAG["link"] in message
 
 
+def test_escalation_message_says_so_explicitly():
+    escalated_flag = {**FLAG, "severity": "High"}
+    message = build_message(escalated_flag, action="escalate", old_severity="Medium")
+    assert message.startswith("HIGH:")
+    assert "ESCALATED to HIGH from MEDIUM" in message
+
+
+def test_non_escalation_message_has_no_escalation_line():
+    message = build_message(FLAG, action="create")
+    assert "ESCALATED" not in message
+
+
+def test_plan_notifications_passes_old_severity_through_to_message():
+    escalated_flag = {**FLAG, "severity": "High"}
+    notifications = plan_notifications(escalated_flag, "escalate", old_severity="Medium")
+    assert all("ESCALATED to HIGH from MEDIUM" in n["message"] for n in notifications)
+
+
 def test_default_email_matrix_matches_table():
     assert DEFAULT_EMAIL_MATRIX["Low"] == ["ana_maria"]
     assert DEFAULT_EMAIL_MATRIX["Medium"] == ["ana_maria", "tatiana"]
