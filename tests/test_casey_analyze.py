@@ -28,6 +28,12 @@ def test_system_prompt_includes_v2_safeguards():
     assert "severity is about this message only" in prompt
 
 
+def test_system_prompt_includes_v3_severity_number_safeguard():
+    prompt = build_system_prompt().lower()
+    assert "the severity number must be justified by what this message's own content" in prompt
+    assert "do not add an ellipsis" in prompt
+
+
 def test_user_message_wraps_target_in_delimiters():
     message = {"body_text": "Hello there"}
     result = build_user_message(message, [], None)
@@ -237,7 +243,7 @@ def test_analyze_one_stores_prompt_version():
     output = _valid_output(evidence_quote="")
     with patch("agents.casey.analyze.call_model", return_value=_fake_response(output)):
         result = analyze_one(message, [], None, model="m", max_tokens=100)
-    assert result["prompt_version"] == PROMPT_VERSION == "casey-analysis-v2"
+    assert result["prompt_version"] == PROMPT_VERSION == "casey-analysis-v3"
 
 
 def _response_without_tool_use():
