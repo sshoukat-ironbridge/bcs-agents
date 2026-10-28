@@ -1094,6 +1094,24 @@ def create_user(email: str, password_hash: str, role: str, linked_name: str = ""
         return None
 
 
+def delete_user(email: str) -> bool:
+    """Deletes a dashboard user by email. Used by scripts/seed_casey_demo_
+    users.py --reset; never exposed as a UI action."""
+    if not _db_available:
+        return False
+    try:
+        with _Session() as s:
+            row = s.query(DashboardUser).filter_by(email=email.strip().lower()).first()
+            if not row:
+                return False
+            s.delete(row)
+            s.commit()
+            return True
+    except Exception as e:
+        logger.error(f"delete_user({email}): {e}")
+        return False
+
+
 def update_user_password(email: str, password_hash: str) -> bool:
     if not _db_available:
         return False
