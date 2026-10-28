@@ -1009,3 +1009,105 @@ false and `CASEY_ENV` is unset.
    `slack_user_id` values only when actually going live — until then,
    every send this system makes is confined to the override/test
    channel by construction.
+
+## Stage 10a: real-data backfill, channel rules, and classification fixes
+
+### Channel rules (apply everywhere)
+
+- **Email**: incoming is stored with full body and is analyzable.
+  Outgoing is stored as **metadata only** (time, thread, recipients,
+  subject — empty body) and is never analyzed; it exists only so the
+  24h response watch can see a reply happened.
+- **Calls**: both directions are stored and analyzed. Only the
+  customer's lines are ever scored (`agents/casey/analyze.py::
+  split_call_transcript`); PM lines are context only.
+- **SMS**: out of scope until its own stage.
+
+### New config keys (all have safe defaults)
+
+- `casey_gmail_mailboxes_mode` (default `pm_config`) — mailboxes come
+  from every `pm_config` email; `"manual"` keeps the old
+  `casey_gmail_mailboxes` list.
+- `casey_gmail_address_batch_size` (default `15`) — customer addresses
+  per Gmail query batch.
+- `casey_dialpad_store_unmatched` (default `false`) — a call matching no
+  active job is never stored locally.
+- `casey_analysis_max_cost_usd` (default `15`) — the backfill's default
+  `--max-cost` cap.
+
+### Schema fixes from the call audit
+
+- `customer_messages.match_status` (`matched|ambiguous|unmatched`) and
+  `.skip_reason` — previously both ambiguous and unmatched rows stored
+  `job_id=None` with no way to tell them apart after the fact.
+- `ingest_run_stats` — one row per mailbox/PM per ingest run, so the
+  counters a run computes (seen, skipped, matched/ambiguous/unmatched,
+  automated, ...) are no longer discarded the moment the process exits.
+- `agents/casey/normalizers.classify_call()` — `customer_words`/
+  `pm_words`/`is_automated`/`skip_reason` from a call's body_text.
+  `is_automated` only ever applies to an OUTBOUND call whose customer
+  text matches a voicemail/greeting phrase; an inbound voicemail from a
+  real customer is real content. `skip_reason="no_customer_text"`
+  covers both "no Customer: lines at all" and "fewer than 3 customer
+  words" — never from word count alone setting `is_automated`.
+- `agents/casey/backfill_classification.py` — one-off, idempotent:
+  recomputes `is_automated`/`skip_reason` from stored `body_text`, and
+  `match_status` by re-matching against current job data (old rows
+  where the ambiguous/unmatched distinction was never persisted get it
+  back). Live result: 21 calls reclassified `is_automated`, 35 given a
+  `skip_reason`, 347 given a `match_status` (32 matched/4 ambiguous/311
+  unmatched at the time); a second run changed nothing.
+
+### Known, unfixed inconsistency: PM name across channels
+
+`casey_active_jobs.pm_name` (from the Google Sheet) carries the raw
+sheet alias ("Daniel Gomez Cortez"), while Dialpad ingestion resolves to
+`pm_config`'s canonical short name ("Daniel") before storing. Everywhere
+that matters for *matching* (dashboard queries, `people_workload()`)
+already resolves through `find_pm()`, so this is cosmetic — but a raw
+per-PM count straight off `customer_messages.pm_name` (e.g. `analyze
+--dry-run`'s per-PM breakdown) will show both forms for the same person.
+Not fixed in this stage; the clean fix is to make Gmail ingestion
+resolve `pm_name` through `find_pm()` at ingest time the same way
+Dialpad already does.
+
+### Live backfill results (local DB, real Gmail/Dialpad/Anthropic, read-only toward the providers)
+
+- **Coverage**: 176 active jobs, 102 monitored across 9 PMs (2 PMs —
+  Jorge, Santiago — had 0 messages in the last 14 days but are still
+  monitored). Not monitored: 15 on hold, 19 blank PM, 40 under 5
+  unrecognized raw PM-name aliases (Juan Pablo/Santiago A/Juan Jose/
+  Jesus/Santiago P — none in `pm_config`), 0 missing email. All 11
+  mailboxes passed the `messages.list` check.
+- **Gmail** (`--since 14d`, cursor reset to force a real 14-day window):
+  526 messages stored (262 inbound full-body, 264 outbound metadata-
+  only), 12 ambiguous, 0 unmatched, 0 automated.
+- **Dialpad** (`--since 14d`, cursor reset): 1042 calls seen, 679 with a
+  transcript, 61 matched, 5 ambiguous, 613 unmatched (not stored), 58
+  automated (voicemail/greeting). 295 previously-stored unmatched calls
+  were purged locally (`--purge-unmatched`), leaving 35 (32 matched + 3
+  ambiguous).
+- **Analysis**: 312 eligible messages; real run (resumed 3 times after
+  transient network errors — see below) finished with 0 remaining.
+  Several messages failed validation on a recurring `evidence_quote`-
+  not-an-exact-substring pattern (the model abbreviating a long quote
+  with "..." despite the Stage 8 instruction against it) — these are
+  stored `status="failed"` and never produce a flag, exactly as
+  designed; not re-tuned here, consistent with "don't keep tuning."
+  Total real cost for this backfill: **≈$3.21** (well under the $15
+  cap), plus ≈$3.81 estimated during the dry run (not charged).
+- **Flags**: 53 analyses processed → 23 created, 11 create_separate, 2
+  escalated, 0 improving, 17 no-op. 35 real (non-demo) flags exist: 12
+  Low, 10 Medium, 10 High, 3 Critical, all status `Open`. 106
+  notifications planned this run (486 total in the table), **all**
+  `status="suppressed"`, `reason="backfill"` — `casey_live_since` is
+  still unset, so nothing was ever eligible to send.
+- **Response watches**: 262 created from the Gmail backfill's 262
+  inbound messages — 114 responded, 127 overdue, 23 waiting, 0 excluded.
+- **Environment note**: this run hit the same transient DNS resolution
+  failure (`dialpad.com`, then `api.anthropic.com`) several times,
+  always mid-request — never from a code bug, and in every case the
+  "cursor/progress only advances on success" guarantee held (Gmail/
+  Dialpad cursors, and `analyze`'s prompt-version-based resumability)
+  so a retry always picked up cleanly with no duplicate work or lost
+  cursor state.
