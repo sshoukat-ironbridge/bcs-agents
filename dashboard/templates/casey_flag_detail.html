@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% import "_casey_macros.html" as m %}
+
+{% block title %}Flag #{{ flag.id }} — Casey — BCS Agents{% endblock %}
+{% block heading %}Casey — Flag #{{ flag.id }}{% endblock %}
+
+{% block content %}
+
+{% include "_casey_demo_banner.html" %}
+
+<a href="/casey/flags" class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 mb-4">
+  ← Back to Flag Tracker
+</a>
+
+{% if saved %}
+<div class="mb-4 px-4 py-2.5 bg-emerald-50 ring-1 ring-emerald-100 rounded-xl text-sm text-emerald-700 font-medium">
+  Saved.
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+  <!-- Left: details -->
+  <div class="lg:col-span-2 space-y-4">
+
+    <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+      <div class="flex items-center gap-3 mb-3 flex-wrap">
+        {{ m.severity_badge(flag.severity) }}
+        {{ m.status_badge(flag.status) }}
+        <span class="text-xs text-slate-400">Age: {{ flag.age_days }}d</span>
+      </div>
+      <h2 class="text-xl font-bold text-slate-800">{{ flag.customer_name or '—' }}</h2>
+      <p class="text-sm text-slate-500 mb-4">{{ flag.address or flag.job_key }}</p>
+
+      <div class="grid grid-cols-2 gap-4 text-sm mb-4">
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide">PM</div>
+          <div class="text-slate-700 font-medium">{{ flag.pm_name or '—' }}</div>
+        </div>
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide">Estimator</div>
+          <div class="text-slate-700 font-medium">{{ flag.estimator_name or '—' }}</div>
+        </div>
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide">Created</div>
+          <div class="text-slate-700">{{ flag.created_str }}</div>
+        </div>
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide">Last Updated</div>
+          <div class="text-slate-700">{{ flag.updated_str }}</div>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">Issue Summary</div>
+        <p class="text-sm text-slate-700">{{ flag.issue_summary or '—' }}</p>
+      </div>
+
+      {% if flag.evidence_quote %}
+      <div class="mb-4 pl-3 border-l-2 border-slate-200">
+        <p class="text-sm text-slate-600 italic">"{{ flag.evidence_quote }}"</p>
+      </div>
+      {% endif %}
+
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">Primary Reason <span class="text-slate-400 font-normal">(suggested until verified)</span></div>
+          <div class="text-slate-700">{{ flag.primary_reason or '—' }}</div>
+        </div>
+        <div>
+          <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">Root Cause <span class="text-slate-400 font-normal">(suggested until verified)</span></div>
+          <div class="text-slate-700">{{ flag.root_cause or '—' }}</div>
+        </div>
+      </div>
+      {% if flag.notes %}
+      <div class="mt-4 pt-4 border-t border-slate-100">
+        <div class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1">Notes</div>
+        <p class="text-sm text-slate-600 whitespace-pre-line">{{ flag.notes }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if flag.trajectory and flag.trajectory|length > 1 %}
+    <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Sentiment Trajectory</h3>
+      <div class="h-32"><canvas id="chart-trajectory"></canvas></div>
+    </div>
+    {% endif %}
+
+    <!-- Timeline -->
+    <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-4">Timeline</h3>
+      {% if flag.events %}
+      <ol class="space-y-3">
+        {% for event in flag.events %}
+        <li class="flex items-start gap-3 text-sm">
+          <div class="w-2 h-2 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0"></div>
+          <div>
+            <div class="text-slate-700">
+              <span class="font-semibold">{{ event.event_type | replace('_', ' ') | title }}</span>
+              {% if event.old_value or event.new_value %}
+              <span class="text-slate-500">— {{ event.old_value or '—' }} → {{ event.new_value or '—' }}</span>
+              {% endif %}
+            </div>
+            <div class="text-xs text-slate-400">{{ event.created_str }} · {{ event.actor }}</div>
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <p class="text-sm text-slate-400">No events yet.</p>
+      {% endif %}
+    </div>
+
+    <!-- Linked messages -->
+    <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-4">Linked Messages</h3>
+      {% if flag.messages %}
+      <ul class="space-y-3">
+        {% for msg in flag.messages %}
+        <li class="text-sm border-l-2 border-slate-100 pl-3">
+          <div class="text-slate-600">{{ msg.snippet }}{% if msg.snippet|length == 160 %}…{% endif %}</div>
+          <div class="text-xs text-slate-400 mt-0.5">{{ msg.occurred_str }} · {{ msg.direction }}{% if msg.sentiment %} · {{ msg.sentiment }}{% endif %}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-sm text-slate-400">No linked messages.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right: human controls -->
+  <div class="space-y-4">
+    <div class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-1">Human Controls</h3>
+      <p class="text-xs text-slate-500 mb-4">Casey never changes status or severity itself.</p>
+
+      <form method="post" action="/casey/flags/{{ flag.id }}" class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Status</label>
+          <select name="status" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+            {% for st in statuses %}
+            <option value="{{ st }}" {% if flag.status == st %}selected{% endif %}>{{ st }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Resolution Reason <span class="text-slate-400">(required for Resolved / No Action Taken)</span></label>
+          <select name="resolution_reason" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+            <option value="">—</option>
+            {% for r in resolution_reasons %}
+            <option value="{{ r }}" {% if flag.resolution_reason == r %}selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="pt-3 border-t border-slate-100">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Severity Override</label>
+          <select name="severity_override" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white mb-2">
+            <option value="">No change</option>
+            {% for sev in severities %}
+            <option value="{{ sev }}" {% if flag.severity == sev %}selected{% endif %}>{{ sev }}</option>
+            {% endfor %}
+          </select>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Override Note <span class="text-slate-400">(required if overriding)</span></label>
+          <input type="text" name="severity_note" placeholder="Why are you changing the severity?"
+            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"/>
+        </div>
+        <div class="pt-3 border-t border-slate-100">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Add a Note</label>
+          <textarea name="notes" rows="3" placeholder="Free-text note…"
+            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"></textarea>
+        </div>
+        <button type="submit"
+          class="w-full px-4 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm hover:shadow-md transition-all duration-150">
+          Save Changes
+        </button>
+      </form>
+    </div>
+  </div>
+
+</div>
+
+{% if flag.trajectory and flag.trajectory|length > 1 %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+  const trajectory = {{ flag.trajectory | tojson }};
+  new Chart(document.getElementById('chart-trajectory'), {
+    type: 'line',
+    data: {
+      labels: trajectory.map((_, i) => i + 1),
+      datasets: [{ data: trajectory.map(p => p.score), borderColor: '#6366f1', backgroundColor: '#6366f1', tension: 0.3, pointRadius: 3 }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: { y: { min: -1, max: 1 }, x: { display: false } },
+    },
+  });
+</script>
+{% endif %}
+
+{% endblock %}

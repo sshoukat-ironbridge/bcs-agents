@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Casey — Flag Tracker — BCS Agents{% endblock %}
+{% block heading %}Casey — Flag Tracker{% endblock %}
+
+{% block content %}
+
+{% include "_casey_demo_banner.html" %}
+
+<form id="flags-filter-form" hx-get="/casey/flags" hx-target="#casey-flags-results" hx-swap="innerHTML"
+      hx-push-url="true" hx-trigger="change, submit"
+      class="bg-white rounded-2xl shadow-sm ring-1 ring-slate-900/5 p-4 mb-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+  <div class="col-span-2 sm:col-span-1">
+    <label class="block text-xs font-medium text-slate-500 mb-1">Search</label>
+    <input type="text" name="search" value="{{ filters.search }}" placeholder="Customer, address, summary…"
+      class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+  </div>
+  <div>
+    <label class="block text-xs font-medium text-slate-500 mb-1">Severity</label>
+    <select name="severity" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+      <option value="">All</option>
+      {% for sev in severities %}
+      <option value="{{ sev }}" {% if filters.severity == sev %}selected{% endif %}>{{ sev }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs font-medium text-slate-500 mb-1">Status</label>
+    <select name="status" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+      <option value="">All</option>
+      {% for st in statuses %}
+      <option value="{{ st }}" {% if filters.status == st %}selected{% endif %}>{{ st }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs font-medium text-slate-500 mb-1">PM</label>
+    <select name="pm" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+      <option value="">All</option>
+      {% for pm in filter_options.pm %}
+      <option value="{{ pm }}" {% if filters.pm == pm %}selected{% endif %}>{{ pm }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs font-medium text-slate-500 mb-1">Estimator</label>
+    <select name="estimator" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+      <option value="">All</option>
+      {% for est in filter_options.estimator %}
+      <option value="{{ est }}" {% if filters.estimator == est %}selected{% endif %}>{{ est }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs font-medium text-slate-500 mb-1">Category</label>
+    <select name="category" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+      <option value="">All</option>
+      {% for cat in filter_options.category %}
+      <option value="{{ cat }}" {% if filters.category == cat %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
+<div id="casey-flags-results">
+  {% include "casey_flags_partial.html" %}
+</div>
+
+{% endblock %}
