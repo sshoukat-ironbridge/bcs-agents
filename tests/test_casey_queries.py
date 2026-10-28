@@ -94,7 +94,10 @@ def test_dashboard_queries_filter_by_is_demo():
 
     for fn in (q.kpis, q.flags_by_severity, q.flags_by_category, q.flags_by_status,
                q.aging_buckets, q.flags_opened_closed_by_week, q.sentiment_by_week,
-               q.flags_list, q.flag_detail, q.filter_options):
+               q.flags_list, q.flag_detail, q.filter_options,
+               q.people_workload, q.strong_praise_list, q.praise_weekly_counts, q.praise_by_pm,
+               q.response_watches_table, q.response_rate_by_pm, q.flags_by_category_weekly,
+               q.sentiment_trajectory_by_pm, q.worsening_projects):
         source = inspect.getsource(fn)
         assert "is_demo" in source, f"{fn.__name__} does not filter by is_demo"
 
